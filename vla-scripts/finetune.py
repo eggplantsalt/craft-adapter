@@ -51,6 +51,7 @@ from prismatic.training.craft_utils import (
     CRaFTGradientProjector,
     CRaFTDualOptimizer,
     CRaFTWeightManager,
+    extract_anchor_features_online,
     compute_retention_loss,
 )
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction
@@ -136,10 +137,13 @@ class FinetuneConfig:
     
     # CRaFT configuration
     use_craft: bool = False                                  # Enable CRaFT training
+    craft_retention_weight: float = 1.0                      # Weight for retention loss (λ)
     craft_retention_budget: float = 0.1                      # Maximum allowed representation drift (ε)
     craft_dual_lr: float = 0.01                              # Learning rate for dual variable (η_λ)
     craft_projection_eps: float = 1e-8                       # Numerical stability constant (δ)
     craft_enable_projection: bool = True                     # Enable conflict-aware gradient projection
+    craft_anchor_layer_idx: Optional[int] = None             # Layer index for C_R (None = middle layer)
+    craft_log_freq: int = 10                                 # CRaFT metrics logging frequency
     # fmt: on
 
 
@@ -460,6 +464,129 @@ def run_forward_pass(
 
     # Return both the loss tensor (with gradients) and the metrics dictionary (with detached values)
     return loss, metrics
+
+
+
+def run_forward_pass_craft(
+    vla,
+    action_head,
+    proprio_projector,
+    batch,
+    action_tokenizer,
+    device_id,
+    use_l1_regression,
+    use_proprio,
+    use_film,
+    num_patches,
+    compute_diffusion_l1=False,
+    use_pro_version=True,
+    cfg=None,
+    feature_extractor=None,
+) -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor]:
+    """
+    CRaFT version of run_forward_pass that also extracts and returns current features.
+    
+    Returns:
+        tuple: (loss, metrics_dict, current_features)
+            loss: The loss tensor with gradient for backpropagation.
+            metrics_dict: Dictionary of computed metrics (detached values for logging).
+            current_features: Current bridging features f_θ, shape (B, 2*D)
+    """
+    metrics = {}
+
+    # Get ground-truth action labels
+    ground_truth_actions = batch["actions"].to(device_id).to(torch.bfloat16)
+
+    # VLA forward pass with CRaFT feature extraction
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        output: CausalLMOutputWithPast = vla(
+            input_ids=batch["input_ids"].to(device_id),
+            attention_mask=batch["attention_mask"].to(device_id),
+            pixel_values=batch["pixel_values"].to(torch.bfloat16).to(device_id),
+            labels=batch["labels"],
+            output_hidden_states=True,
+            output_craft_features=True,  # Enable CRaFT feature extraction
+            proprio=batch["proprio"] if use_proprio else None,
+            proprio_projector=proprio_projector if use_proprio else None,
+            noisy_actions=None,
+            noisy_action_projector=None,
+            diffusion_timestep_embeddings=None,
+            use_film=use_film,
+        )
+
+    # Extract current features for CRaFT
+    if output.raw_latent_features is None or output.action_query_features is None:
+        raise RuntimeError("CRaFT features not extracted! Ensure output_craft_features=True")
+    
+    current_features = feature_extractor(
+        output.raw_latent_features,
+        output.action_query_features,
+    )  # (B, 2*D)
+
+    # Get action masks needed for logging
+    ground_truth_token_ids = batch["labels"][:,1:].to(device_id)
+    current_action_mask = get_current_action_mask(ground_truth_token_ids)
+    next_actions_mask = get_next_actions_mask(ground_truth_token_ids)
+
+    # Compute metrics for continuous action representations (L1 regression)
+    if use_l1_regression:
+        # Get last layer hidden states
+        multi_layer_hidden_states = []
+        
+        for item in output.hidden_states[0:]:
+            text_hidden_states = item[:, num_patches:-1]
+            batch_size = batch["input_ids"].shape[0]
+            actions_hidden_states = text_hidden_states[current_action_mask | next_actions_mask].reshape(batch_size, 1, NUM_TOKENS, -1).to(torch.bfloat16)
+            task_latten_states = item[:, :num_patches].reshape(batch_size, 1, num_patches, -1)
+            all_hidden_states = torch.cat((task_latten_states, actions_hidden_states), 2)
+            multi_layer_hidden_states.append(all_hidden_states)
+        multi_layer_hidden_states = torch.cat(multi_layer_hidden_states, dim=1)
+
+        predicted_actions = action_head.module.predict_action(
+            multi_layer_hidden_states,
+            proprio=batch["proprio"] if use_proprio else None,
+            proprio_projector=proprio_projector if use_proprio else None,
+            phase=cfg.phase,
+        )
+
+        loss = torch.nn.L1Loss()(predicted_actions, ground_truth_actions)
+
+        metrics.update({
+            "loss_value": loss.item(),
+        })
+
+        # Get detailed L1 losses for logging
+        ground_truth_curr_action = ground_truth_actions[:, 0]
+        predicted_curr_action = predicted_actions[:, 0]
+        ground_truth_next_actions = ground_truth_actions[:, 1:]
+        predicted_next_actions = predicted_actions[:, 1:]
+        curr_action_l1_loss = torch.nn.L1Loss()(ground_truth_curr_action, predicted_curr_action)
+        next_actions_l1_loss = torch.nn.L1Loss()(ground_truth_next_actions, predicted_next_actions)
+
+        metrics.update({
+            "curr_action_l1_loss": curr_action_l1_loss.item(),
+            "next_actions_l1_loss": next_actions_l1_loss.item(),
+        })
+    else:
+        # Discrete action prediction (not typically used with CRaFT)
+        loss = output.loss
+        predicted_token_ids = output.logits[:, num_patches:-1].argmax(dim=2)
+
+        curr_action_accuracy = compute_token_accuracy(predicted_token_ids, ground_truth_token_ids, mask=current_action_mask)
+        curr_action_l1_loss = compute_actions_l1_loss(action_tokenizer, predicted_token_ids, ground_truth_token_ids, mask=current_action_mask)
+        next_actions_accuracy = compute_token_accuracy(predicted_token_ids, ground_truth_token_ids, mask=next_actions_mask)
+        next_actions_l1_loss = compute_actions_l1_loss(action_tokenizer, predicted_token_ids, ground_truth_token_ids, mask=next_actions_mask)
+        
+        metrics.update({
+            "loss_value": loss.item(),
+            "curr_action_accuracy": curr_action_accuracy.item(),
+            "curr_action_l1_loss": curr_action_l1_loss.item(),
+            "next_actions_accuracy": next_actions_accuracy.item(),
+            "next_actions_l1_loss": next_actions_l1_loss.item(),
+        })
+
+    # Return loss, metrics, and current features
+    return loss, metrics, current_features
 
 
 
@@ -883,6 +1010,47 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Wrap VLA with DDP
     vla = wrap_ddp(vla, device_id, find_unused=True)
 
+    # === Initialize CRaFT Components (if enabled) ===
+    craft_weight_manager = None
+    craft_feature_extractor = None
+    craft_gradient_projector = None
+    craft_dual_optimizer = None
+    
+    if cfg.use_craft:
+        print("\n" + "="*60)
+        print("Initializing CRaFT (Constrained Representation and Fine-Tuning)")
+        print("="*60)
+        
+        # Create CRaFT configuration
+        craft_config = CRaFTConfig(
+            anchor_layer_idx=cfg.craft_anchor_layer_idx,
+            use_mean_pooling=True,
+            retention_weight=cfg.craft_retention_weight,
+            retention_budget=cfg.craft_retention_budget,
+            dual_lr=cfg.craft_dual_lr,
+            dual_init=0.0,
+            projection_eps=cfg.craft_projection_eps,
+            enable_projection=cfg.craft_enable_projection,
+        )
+        
+        # Initialize weight manager (saves initial adapter weights)
+        craft_weight_manager = CRaFTWeightManager(vla, device_id)
+        
+        # Initialize feature extractor
+        craft_feature_extractor = CRaFTFeatureExtractor(craft_config).to(device_id)
+        craft_feature_extractor.eval()
+        
+        # Initialize gradient projector
+        craft_gradient_projector = CRaFTGradientProjector(craft_config)
+        
+        # Initialize dual optimizer
+        craft_dual_optimizer = CRaFTDualOptimizer(craft_config)
+        
+        print(f"[CRaFT] Retention budget (ε): {cfg.craft_retention_budget}")
+        print(f"[CRaFT] Dual learning rate (η_λ): {cfg.craft_dual_lr}")
+        print(f"[CRaFT] Gradient projection: {'Enabled' if cfg.craft_enable_projection else 'Disabled'}")
+        print("="*60 + "\n")
+
     # If applicable, instantiate proprio projector
     if cfg.use_proprio:
         proprio_projector = init_module(
@@ -1032,29 +1200,117 @@ def finetune(cfg: FinetuneConfig) -> None:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
-            # Compute training metrics and loss
+            # === CRaFT: Extract anchor features (if enabled) ===
+            anchor_features = None
+            if cfg.use_craft:
+                anchor_features = extract_anchor_features_online(
+                    model=vla,
+                    weight_manager=craft_weight_manager,
+                    feature_extractor=craft_feature_extractor,
+                    batch=batch,
+                    device=device_id,
+                    num_patches=NUM_PATCHES,
+                    use_proprio=cfg.use_proprio,
+                    proprio_projector=proprio_projector if cfg.use_proprio else None,
+                    use_film=cfg.use_film,
+                )  # (B, 2*D), detached
+            
+            # === Standard Forward Pass (with gradient) ===
             compute_diffusion_l1 = (cfg.use_l1_regression and batch_idx % cfg.diffusion_sample_freq == 0) or (cfg.use_diffusion and batch_idx % cfg.diffusion_sample_freq == 0)
-            loss, metrics = run_forward_pass(
-                vla=vla,
-                action_head=action_head,
-                proprio_projector=proprio_projector if cfg.use_proprio else None,
-                batch=batch,
-                action_tokenizer=action_tokenizer,
-                device_id=device_id,
-                use_l1_regression=cfg.use_l1_regression,
-                use_proprio=cfg.use_proprio,
-                use_film=cfg.use_film,
-                num_patches=NUM_PATCHES,
-                compute_diffusion_l1=compute_diffusion_l1,
-                use_pro_version=cfg.use_pro_version,
-                cfg=cfg,
-            )
+            
+            # Modified run_forward_pass to also return current features if CRaFT is enabled
+            if cfg.use_craft:
+                loss, metrics, current_features = run_forward_pass_craft(
+                    vla=vla,
+                    action_head=action_head,
+                    proprio_projector=proprio_projector if cfg.use_proprio else None,
+                    batch=batch,
+                    action_tokenizer=action_tokenizer,
+                    device_id=device_id,
+                    use_l1_regression=cfg.use_l1_regression,
+                    use_proprio=cfg.use_proprio,
+                    use_film=cfg.use_film,
+                    num_patches=NUM_PATCHES,
+                    compute_diffusion_l1=compute_diffusion_l1,
+                    use_pro_version=cfg.use_pro_version,
+                    cfg=cfg,
+                    feature_extractor=craft_feature_extractor,
+                )
+            else:
+                loss, metrics = run_forward_pass(
+                    vla=vla,
+                    action_head=action_head,
+                    proprio_projector=proprio_projector if cfg.use_proprio else None,
+                    batch=batch,
+                    action_tokenizer=action_tokenizer,
+                    device_id=device_id,
+                    use_l1_regression=cfg.use_l1_regression,
+                    use_proprio=cfg.use_proprio,
+                    use_film=cfg.use_film,
+                    num_patches=NUM_PATCHES,
+                    compute_diffusion_l1=compute_diffusion_l1,
+                    use_pro_version=cfg.use_pro_version,
+                    cfg=cfg,
+                )
 
             # Normalize loss to account for gradient accumulation
             normalized_loss = loss / cfg.grad_accumulation_steps
 
-            # Backward pass
-            normalized_loss.backward()
+            # === CRaFT: Two-Stage Backward with Gradient Projection ===
+            if cfg.use_craft:
+                # Stage 1: Backward for action loss, save gradients
+                normalized_loss.backward(retain_graph=True)
+                
+                # Save action gradients
+                action_grads = {}
+                base_model = vla.module if hasattr(vla, 'module') else vla
+                for name, param in base_model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        action_grads[name] = param.grad.clone()
+                
+                # Clear gradients
+                optimizer.zero_grad()
+                
+                # Stage 2: Compute retention loss and backward
+                retention_loss = compute_retention_loss(current_features, anchor_features)
+                retention_loss_scaled = retention_loss / cfg.grad_accumulation_steps
+                retention_loss_scaled.backward()
+                
+                # Save retention gradients
+                retention_grads = {}
+                for name, param in base_model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        retention_grads[name] = param.grad.clone()
+                
+                # Clear gradients again
+                optimizer.zero_grad()
+                
+                # Stage 3: Gradient projection and combination
+                lambda_val = craft_dual_optimizer.get_lambda()
+                
+                for name, param in base_model.named_parameters():
+                    if param.requires_grad and name in action_grads and name in retention_grads:
+                        g_act = action_grads[name].flatten()
+                        g_ret = retention_grads[name].flatten()
+                        
+                        # Project action gradient if conflict exists
+                        g_act_projected = craft_gradient_projector.project_gradients(g_act, g_ret)
+                        
+                        # Combine: g_final = g_act_projected + λ * g_ret
+                        g_final = g_act_projected + lambda_val * g_ret
+                        
+                        # Reshape and assign back
+                        param.grad = g_final.reshape(param.shape)
+                
+                # Update dual variable
+                craft_dual_optimizer.step(retention_loss.item())
+                
+                # Add CRaFT metrics
+                metrics['retention_loss'] = retention_loss.item()
+                metrics['lambda'] = lambda_val
+            else:
+                # Standard backward pass
+                normalized_loss.backward()
 
             # Store recent train metrics
             for metric_name, value in metrics.items():
@@ -1071,6 +1327,13 @@ def finetune(cfg: FinetuneConfig) -> None:
             log_step = gradient_step_idx if not cfg.resume else cfg.resume_step + gradient_step_idx
             if distributed_state.is_main_process and log_step % cfg.wandb_log_freq == 0:
                 log_metrics_to_wandb(smoothened_metrics, "VLA Train", log_step, wandb)
+                
+                # Log CRaFT-specific metrics
+                if cfg.use_craft and log_step % cfg.craft_log_freq == 0:
+                    wandb.log({
+                        "CRaFT/Retention Loss": metrics.get('retention_loss', 0.0),
+                        "CRaFT/Lambda": metrics.get('lambda', 0.0),
+                    }, step=log_step)
 
             # [If applicable] Linearly warm up learning rate from 10% to 100% of original
             if cfg.lr_warmup_steps > 0:

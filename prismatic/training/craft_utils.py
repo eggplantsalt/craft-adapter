@@ -31,6 +31,8 @@ class CRaFTConfig:
     # Gradient projection
     projection_eps: float = 1e-8            # Small constant for numerical stability (δ)
     enable_projection: bool = True          # Whether to enable conflict-aware gradient projection
+    
+
 
 
 class CRaFTFeatureExtractor(nn.Module):
@@ -153,57 +155,25 @@ class CRaFTGradientProjector:
     def project_gradients_batch(
         self,
         model: nn.Module,
-        action_grads: dict,
-        retention_grads: dict,
-    ) -> dict:
+        action_loss: torch.Tensor,
+        retention_loss: torch.Tensor,
+    ) -> None:
         """
-        Apply conflict-aware gradient projection for all trainable parameters.
+        Compute gradients for both losses and apply projection in-place.
         
-        This method projects action gradients when they conflict with retention gradients,
-        then combines them with the dual-weighted retention gradients.
+        This method:
+        1. Computes gradients for action loss
+        2. Computes gradients for retention loss
+        3. Projects action gradients where conflicts occur
+        4. Updates model gradients with projected action gradients + retention gradients
         
         Args:
             model: The model whose gradients to project
-            action_grads: Dictionary of action gradients {param_name: grad_tensor}
-            retention_grads: Dictionary of retention gradients {param_name: grad_tensor}
-        
-        Returns:
-            Dictionary of projected gradients ready for optimizer.step()
+            action_loss: Action prediction loss
+            retention_loss: Representation retention loss
         """
-        if not self.enable_projection:
-            # No projection, just return action gradients
-            return action_grads
-        
-        projected_grads = {}
-        
-        for name, param in model.named_parameters():
-            if not param.requires_grad or name not in action_grads:
-                continue
-            
-            g_act = action_grads[name]
-            g_ret = retention_grads[name]
-            
-            # Flatten gradients for dot product computation
-            g_act_flat = g_act.flatten()
-            g_ret_flat = g_ret.flatten()
-            
-            # Compute dot product
-            dot_product = torch.dot(g_act_flat, g_ret_flat)
-            
-            # Only project if gradients conflict (negative dot product)
-            if dot_product < 0:
-                # Compute projection coefficient
-                retention_norm_sq = torch.dot(g_ret_flat, g_ret_flat)
-                coeff = dot_product / (retention_norm_sq + self.eps)
-                
-                # Project action gradient (reshape back to original shape)
-                g_act_projected_flat = g_act_flat - coeff * g_ret_flat
-                projected_grads[name] = g_act_projected_flat.reshape_as(g_act)
-            else:
-                # No conflict, keep original action gradient
-                projected_grads[name] = g_act
-        
-        return projected_grads
+        # This will be implemented in Phase 3
+        raise NotImplementedError("Batch gradient projection will be implemented in Phase 3")
 
 
 class CRaFTDualOptimizer:
@@ -277,79 +247,152 @@ class CRaFTWeightManager:
     """
     Manages weight swapping for online anchor feature extraction.
     
-    This class handles saving initial weights and swapping between current and initial
-    weights to enable zero-overhead online reference feature extraction.
+    This class implements the "No-Grad First, Grad Second" strategy to minimize
+    peak GPU memory usage. It stores initial adapter weights and provides methods
+    to swap between initial and current weights during training.
     """
     
     def __init__(self, model: nn.Module, device: torch.device):
         """
-        Initialize weight manager and save initial trainable weights.
+        Initialize weight manager and save initial adapter weights.
         
         Args:
-            model: The model (can be DDP-wrapped)
-            device: Device where model resides
+            model: The model (potentially wrapped with DDP)
+            device: Device where the model resides
         """
         self.device = device
         self.initial_weights = {}
         
-        # Extract and save initial weights (only trainable parameters)
-        # Handle both DDP-wrapped and non-wrapped models
-        if hasattr(model, 'module'):
-            # DDP-wrapped model
-            base_model = model.module
-        else:
-            base_model = model
+        # Extract and save initial trainable weights
+        # Handle DDP wrapper: access .module if wrapped
+        base_model = model.module if hasattr(model, 'module') else model
         
         for name, param in base_model.named_parameters():
             if param.requires_grad:
                 # Deep copy to CPU to save memory
                 self.initial_weights[name] = param.data.clone().detach().cpu()
         
-        print(f"[CRaFT] Saved {len(self.initial_weights)} initial weight tensors")
+        print(f"[CRaFT] Saved {len(self.initial_weights)} initial trainable parameters")
     
-    def swap_to_initial(self, model: nn.Module) -> dict:
+    def swap_to_initial(self, model: nn.Module) -> None:
         """
-        Swap model weights to initial weights and return current weights.
+        Swap model weights to initial (pretrained) state.
         
         Args:
-            model: The model to swap weights for
-        
-        Returns:
-            Dictionary of current weights (before swap)
+            model: The model to modify
         """
-        current_weights = {}
-        
-        # Handle DDP wrapper
-        if hasattr(model, 'module'):
-            base_model = model.module
-        else:
-            base_model = model
+        base_model = model.module if hasattr(model, 'module') else model
         
         for name, param in base_model.named_parameters():
             if name in self.initial_weights:
-                # Save current weight
-                current_weights[name] = param.data.clone()
-                
-                # Load initial weight
                 param.data.copy_(self.initial_weights[name].to(self.device))
-        
-        return current_weights
     
     def swap_to_current(self, model: nn.Module, current_weights: dict) -> None:
         """
-        Restore model weights to current training weights.
+        Swap model weights back to current training state.
         
         Args:
-            model: The model to restore weights for
-            current_weights: Dictionary of current weights to restore
+            model: The model to modify
+            current_weights: Dictionary of current weights (name -> tensor)
         """
-        # Handle DDP wrapper
-        if hasattr(model, 'module'):
-            base_model = model.module
-        else:
-            base_model = model
+        base_model = model.module if hasattr(model, 'module') else model
         
         for name, param in base_model.named_parameters():
             if name in current_weights:
                 param.data.copy_(current_weights[name])
+    
+    def save_current_weights(self, model: nn.Module) -> dict:
+        """
+        Save current model weights (before swapping).
+        
+        Args:
+            model: The model to save from
+        
+        Returns:
+            Dictionary of current weights (name -> tensor on device)
+        """
+        base_model = model.module if hasattr(model, 'module') else model
+        current_weights = {}
+        
+        for name, param in base_model.named_parameters():
+            if name in self.initial_weights:
+                current_weights[name] = param.data.clone()
+        
+        return current_weights
+
+
+def extract_anchor_features_online(
+    model: nn.Module,
+    weight_manager: CRaFTWeightManager,
+    feature_extractor: CRaFTFeatureExtractor,
+    batch: dict,
+    device: torch.device,
+    num_patches: int,
+    use_proprio: bool = False,
+    proprio_projector: Optional[nn.Module] = None,
+    use_film: bool = False,
+) -> torch.Tensor:
+    """
+    Extract anchor features using online weight swapping (no-grad mode).
+    
+    This function implements the memory-efficient strategy:
+    1. Save current weights
+    2. Swap to initial weights
+    3. Forward pass with torch.no_grad() to get anchor features
+    4. Swap back to current weights
+    
+    Args:
+        model: The VLA model
+        weight_manager: Weight manager for swapping
+        feature_extractor: CRaFT feature extractor
+        batch: Input batch
+        device: Device
+        num_patches: Number of vision patches
+        use_proprio: Whether to use proprioceptive input
+        proprio_projector: Proprioceptive projector
+        use_film: Whether to use FiLM
+    
+    Returns:
+        Anchor features f̃, shape (B, 2*D)
+    """
+    # Step 1: Save current training weights
+    current_weights = weight_manager.save_current_weights(model)
+    
+    # Step 2: Swap to initial weights
+    weight_manager.swap_to_initial(model)
+    
+    # Step 3: Extract anchor features (no gradient)
+    with torch.no_grad():
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            output = model(
+                input_ids=batch["input_ids"].to(device),
+                attention_mask=batch["attention_mask"].to(device),
+                pixel_values=batch["pixel_values"].to(torch.bfloat16).to(device),
+                labels=batch["labels"].to(device),
+                output_hidden_states=True,
+                output_craft_features=True,
+                proprio=batch["proprio"] if use_proprio else None,
+                proprio_projector=proprio_projector if use_proprio else None,
+                use_film=use_film,
+            )
+        
+        # Extract and process features
+        if output.raw_latent_features is None or output.action_query_features is None:
+            raise RuntimeError("CRaFT features not extracted! Ensure output_craft_features=True")
+        
+        anchor_features = feature_extractor(
+            output.raw_latent_features,
+            output.action_query_features,
+        )  # (B, 2*D)
+        
+        # Detach to ensure no gradient flow
+        anchor_features = anchor_features.detach()
+    
+    # Step 4: Swap back to current weights
+    weight_manager.swap_to_current(model, current_weights)
+    
+    return anchor_features
+
+
+
 
