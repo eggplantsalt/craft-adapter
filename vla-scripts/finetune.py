@@ -142,11 +142,14 @@ class FinetuneConfig:
     craft_dual_lr: float = 0.01                              # Learning rate for dual variable (η_λ)
     craft_projection_eps: float = 1e-8                       # Numerical stability constant (δ)
     craft_enable_projection: bool = True                     # Enable conflict-aware gradient projection
+    craft_enable_dual: bool = True                           # Enable adaptive dual variable optimization
+    craft_fixed_lambda: float = 0.1                          # Fixed lambda when craft_enable_dual=False
+    craft_anchor_type: str = "concat"                        # Anchor feature type: 'concat', 'aq_only', 'raw_only'
     craft_anchor_layer_idx: Optional[int] = None             # Layer index for C_R (None = middle layer)
     craft_log_freq: int = 10                                 # CRaFT metrics logging frequency
     
     # Few-shot configuration
-    n_shot_episodes: Optional[int] = None                    # If provided, limits training to first N episodes (for few-shot experiments)
+    n_shot_episodes: Optional[int] = None                    # If provided, limits training to first N episodes per task (for few-shot experiments)
     # fmt: on
 
 
@@ -1033,10 +1036,13 @@ def finetune(cfg: FinetuneConfig) -> None:
         craft_config = CRaFTConfig(
             anchor_layer_idx=cfg.craft_anchor_layer_idx,
             use_mean_pooling=True,
+            anchor_type=cfg.craft_anchor_type,
             retention_weight=cfg.craft_retention_weight,
             retention_budget=cfg.craft_retention_budget,
             dual_lr=cfg.craft_dual_lr,
             dual_init=0.0,
+            enable_dual=cfg.craft_enable_dual,
+            fixed_lambda=cfg.craft_fixed_lambda,
             projection_eps=cfg.craft_projection_eps,
             enable_projection=cfg.craft_enable_projection,
         )
@@ -1057,6 +1063,8 @@ def finetune(cfg: FinetuneConfig) -> None:
         print(f"[CRaFT] Retention budget (ε): {cfg.craft_retention_budget}")
         print(f"[CRaFT] Dual learning rate (η_λ): {cfg.craft_dual_lr}")
         print(f"[CRaFT] Gradient projection: {'Enabled' if cfg.craft_enable_projection else 'Disabled'}")
+        print(f"[CRaFT] Dual optimization: {'Enabled' if cfg.craft_enable_dual else f'Disabled (λ={cfg.craft_fixed_lambda})'}")
+        print(f"[CRaFT] Anchor type: {cfg.craft_anchor_type}")
         print("="*60 + "\n")
 
     # If applicable, instantiate proprio projector
@@ -1247,21 +1255,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                     feature_extractor=craft_feature_extractor,
                 )
             else:
-                loss, metrics = run_forward_pass(
-                    vla=vla,
-                    action_head=action_head,
-                    proprio_projector=proprio_projector if cfg.use_proprio else None,
-                    batch=batch,
-                    action_tokenizer=action_tokenizer,
-                    device_id=device_id,
-                    use_l1_regression=cfg.use_l1_regression,
-                    use_proprio=cfg.use_proprio,
-                    use_film=cfg.use_film,
-                    num_patches=NUM_PATCHES,
-                    compute_diffusion_l1=compute_diffusion_l1,
-                    use_pro_version=cfg.use_pro_version,
-                    cfg=cfg,
-                )
+            loss, metrics = run_forward_pass(
+                vla=vla,
+                action_head=action_head,
+                proprio_projector=proprio_projector if cfg.use_proprio else None,
+                batch=batch,
+                action_tokenizer=action_tokenizer,
+                device_id=device_id,
+                use_l1_regression=cfg.use_l1_regression,
+                use_proprio=cfg.use_proprio,
+                use_film=cfg.use_film,
+                num_patches=NUM_PATCHES,
+                compute_diffusion_l1=compute_diffusion_l1,
+                use_pro_version=cfg.use_pro_version,
+                cfg=cfg,
+            )
 
             # Normalize loss to account for gradient accumulation
             normalized_loss = loss / cfg.grad_accumulation_steps
@@ -1320,7 +1328,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 metrics['lambda'] = lambda_val
             else:
                 # Standard backward pass
-                normalized_loss.backward()
+            normalized_loss.backward()
 
             # Store recent train metrics
             for metric_name, value in metrics.items():

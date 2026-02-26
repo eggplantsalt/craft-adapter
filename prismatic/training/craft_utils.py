@@ -19,6 +19,7 @@ class CRaFTConfig:
     # Feature extraction
     anchor_layer_idx: Optional[int] = None  # If None, uses middle layer (num_layers // 2)
     use_mean_pooling: bool = True           # Whether to use mean pooling for feature aggregation
+    anchor_type: str = "concat"             # Feature type: 'concat', 'aq_only', 'raw_only'
     
     # Representation retention
     retention_weight: float = 1.0           # Weight for retention loss (λ in the paper)
@@ -27,6 +28,8 @@ class CRaFTConfig:
     # Dual optimization
     dual_lr: float = 0.01                   # Learning rate for dual variable (η_λ)
     dual_init: float = 0.0                  # Initial value for dual variable
+    enable_dual: bool = True                # Whether to enable adaptive dual optimization
+    fixed_lambda: float = 0.1               # Fixed lambda when enable_dual=False
     
     # Gradient projection
     projection_eps: float = 1e-8            # Small constant for numerical stability (δ)
@@ -53,6 +56,7 @@ class CRaFTFeatureExtractor(nn.Module):
         super().__init__()
         self.config = config
         self.use_mean_pooling = config.use_mean_pooling
+        self.anchor_type = config.anchor_type  # 'concat', 'aq_only', 'raw_only'
     
     def pool_features(self, features: torch.Tensor) -> torch.Tensor:
         """
@@ -84,14 +88,24 @@ class CRaFTFeatureExtractor(nn.Module):
             action_query_features: C_AQ from final layer, shape (B, num_action_tokens, D)
         
         Returns:
-            Concatenated feature representation f_θ of shape (B, 2*D)
+            Feature representation f_θ of shape (B, D) or (B, 2*D) depending on anchor_type
         """
         # Pool both feature types
         pooled_raw = self.pool_features(raw_latent_features)      # (B, D)
         pooled_action = self.pool_features(action_query_features)  # (B, D)
         
-        # Concatenate along feature dimension
-        combined_features = torch.cat([pooled_raw, pooled_action], dim=-1)  # (B, 2*D)
+        # Select features based on anchor_type
+        if self.anchor_type == "concat":
+            # Concatenate both features (original CRaFT)
+            combined_features = torch.cat([pooled_raw, pooled_action], dim=-1)  # (B, 2*D)
+        elif self.anchor_type == "aq_only":
+            # Use only ActionQuery features
+            combined_features = pooled_action  # (B, D)
+        elif self.anchor_type == "raw_only":
+            # Use only Raw Latent features
+            combined_features = pooled_raw  # (B, D)
+        else:
+            raise ValueError(f"Invalid anchor_type: {self.anchor_type}. Must be 'concat', 'aq_only', or 'raw_only'")
         
         return combined_features
 
@@ -193,9 +207,14 @@ class CRaFTDualOptimizer:
         self.config = config
         self.dual_lr = config.dual_lr
         self.budget = config.retention_budget
+        self.enable_dual = config.enable_dual
         
         # Initialize dual variable
-        self.lambda_val = config.dual_init
+        if self.enable_dual:
+            self.lambda_val = config.dual_init
+        else:
+            # Use fixed lambda when dual optimization is disabled
+            self.lambda_val = config.fixed_lambda
     
     def step(self, retention_loss: float) -> None:
         """
@@ -204,6 +223,10 @@ class CRaFTDualOptimizer:
         Args:
             retention_loss: Current value of retention loss
         """
+        if not self.enable_dual:
+            # Keep lambda fixed when dual optimization is disabled
+            return
+        
         # Compute constraint violation
         violation = retention_loss - self.budget
         
