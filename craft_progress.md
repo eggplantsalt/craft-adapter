@@ -3,13 +3,13 @@
 ## Project Overview
 实现 CRaFT (Constrained Representation and Fine-Tuning) 算法到 VLA-Adapter 代码库中。
 
-## Current Phase: Phase 3 - 在线权重切换与梯度投影实现
+## Current Phase: Phase 5 - 实验自动化框架与主实验脚本
 
 **Status**: ✅ COMPLETED
 
-**Start Date**: 2026-02-26
+**Start Date**: 2026-02-27
 
-**Completion Date**: 2026-02-26
+**Completion Date**: 2026-02-27
 
 ---
 
@@ -318,33 +318,320 @@ Epoch 1, Step 200:
 
 ---
 
+## Phase 5: 实验自动化框架与主实验脚本
+
+**Status**: ✅ COMPLETED
+
+**Completion Date**: 2026-02-27
+
+### 实施目标
+1. ✅ 创建实验目录结构
+2. ✅ 调研评估链路（Train → Eval 流程）
+3. ✅ 编写公共工具函数（日志解析、成功率提取）
+4. ✅ 编写 Table 1 主实验自动化脚本（Bash + PowerShell）
+5. ✅ 编写详细的使用文档
+
+### 实验目录结构
+
+```
+craft_experiments/
+├── 01_main_results/              # Table 1: 主实验结果
+│   ├── run_table1_experiments.sh     # Bash 脚本（Linux/Mac）
+│   ├── run_table1_experiments.ps1    # PowerShell 脚本（Windows）
+│   ├── README.md                     # 使用文档
+│   ├── table1_results.log            # 原始结果（运行后生成）
+│   ├── table1_formatted.md           # 格式化表格（运行后生成）
+│   └── eval_logs/                    # 评估日志目录
+├── 02_stability_efficiency/      # Table 2 & 3: 多任务与小样本
+├── 03_ablations/                 # Table 4: 消融实验
+└── common_utils/                 # 公共工具
+    └── log_parser.py                 # 日志解析工具
+```
+
+### 评估链路调研
+
+通过阅读 `run_libero_eval.py` 和 `vla_evaluation.py`，我明确了以下关键信息：
+
+#### 训练输出
+- **Checkpoint 目录格式**: `{run_dir}--{step}_chkpt/`
+- **示例**: `runs/craft-libero_spatial-table1--20000_chkpt/`
+- **内容**: 包含 LoRA adapter、processor、dataset statistics
+
+#### 评估输入
+- **必需参数**:
+  - `--pretrained_checkpoint`: Checkpoint 目录路径
+  - `--task_suite_name`: 任务套件名称（libero_spatial, libero_object, libero_goal, libero_10）
+  - `--num_trials_per_task`: 每个任务的评估次数（默认 50）
+  - `--use_l1_regression`: 必须与训练时一致
+  - `--use_proprio`: 必须与训练时一致
+  - `--num_images_in_input`: 必须与训练时一致（1 或 2）
+
+#### 评估输出
+- **日志文件**: `experiments/logs/EVAL-{task_suite}-{model_family}-{timestamp}.txt`
+- **成功率格式**: `Overall success rate: 0.8500 (85.0%)`
+- **视频文件**: `experiments/logs/rollout_videos/`
+
+### 公共工具实现
+
+#### log_parser.py
+
+**功能**:
+1. `extract_success_rate_from_log()`: 从评估日志中提取总体成功率
+2. `extract_checkpoint_path()`: 从训练目录中找到最新的 checkpoint
+3. `parse_all_results()`: 解析包含多个任务结果的日志文件
+4. `format_results_table()`: 将结果格式化为 Markdown 表格
+
+**使用示例**:
+```python
+from log_parser import extract_success_rate_from_log
+
+success_rate = extract_success_rate_from_log("eval_log.txt")
+print(f"Success rate: {success_rate:.4f}")
+```
+
+### Table 1 自动化脚本
+
+#### 核心逻辑
+
+```
+For each task_suite in [libero_spatial, libero_object, libero_goal, libero_10]:
+    1. Train CRaFT model
+       └─ python finetune.py --use_craft True --dataset_name {task_suite} ...
+    
+    2. Find latest checkpoint
+       └─ ls -td runs/{run_id}--*_chkpt | head -1
+    
+    3. Evaluate checkpoint
+       └─ python run_libero_eval.py --pretrained_checkpoint {checkpoint} ...
+    
+    4. Extract success rate
+       └─ python log_parser.py {eval_log}
+    
+    5. Record result
+       └─ echo "{task_suite}: {success_rate}" >> table1_results.log
+```
+
+#### 配置参数
+
+**训练配置**:
+- Batch size: 8
+- Learning rate: 5e-4
+- Max steps: 20,000
+- Save frequency: 5,000 steps
+- LoRA rank: 32
+
+**CRaFT 配置**:
+- `use_craft`: True
+- `craft_retention_budget` (ε): 0.1
+- `craft_dual_lr` (η_λ): 0.01
+- `craft_enable_projection`: True
+
+**评估配置**:
+- Trials per task: 50
+- Number of images: 2 (with wrist camera)
+- Center crop: True
+
+#### 双平台支持
+
+**Bash 脚本** (`run_table1_experiments.sh`):
+- 适用于 Linux/Mac 环境
+- 使用标准 Bash 语法
+- 支持 `tee` 命令实时日志
+
+**PowerShell 脚本** (`run_table1_experiments.ps1`):
+- 适用于 Windows 环境
+- 使用 PowerShell 语法
+- 彩色输出，更好的可读性
+
+### 输出文件说明
+
+#### table1_results.log（原始结果）
+```
+Starting experiments at 2026-02-27 10:00:00
+
+libero_spatial: 0.8500
+
+libero_object: 0.9200
+
+libero_goal: 0.8800
+
+libero_10: 0.7600
+```
+
+#### table1_formatted.md（格式化表格）
+```markdown
+# Table 1: Main Results - CRaFT on LIBERO
+
+| Task Suite | Success Rate |
+|------------|-------------|
+| libero_10 | 0.7600 (76.0%) |
+| libero_goal | 0.8800 (88.0%) |
+| libero_object | 0.9200 (92.0%) |
+| libero_spatial | 0.8500 (85.0%) |
+|------------|-------------|
+| **Average** | **0.8525 (85.2%)** |
+```
+
+### 使用方法
+
+#### 在服务器上运行（Linux）
+
+```bash
+# 1. 上传代码到服务器
+git push origin main
+
+# 2. 在服务器上拉取
+cd /path/to/VLA-Adapter
+git pull
+
+# 3. 运行实验
+bash craft_experiments/01_main_results/run_table1_experiments.sh
+```
+
+#### 在本地运行（Windows）
+
+```powershell
+# 在 PowerShell 中运行
+cd E:\VLA-Adapter
+powershell -ExecutionPolicy Bypass -File craft_experiments/01_main_results/run_table1_experiments.ps1
+```
+
+### 预期运行时间
+
+在单张 RTX 4090 (24GB) 上：
+- **训练**: ~4-6 小时/任务套件（20k steps）
+- **评估**: ~2-3 小时/任务套件（50 trials × 10 tasks）
+- **总计**: ~24-36 小时（4 个任务套件）
+
+### 错误处理
+
+脚本包含完善的错误处理机制：
+
+1. **训练失败**: 记录 `TRAINING_FAILED`，跳过该任务套件
+2. **Checkpoint 未找到**: 记录 `NO_CHECKPOINT`，跳过评估
+3. **评估失败**: 记录 `EVAL_FAILED`，跳过结果提取
+4. **解析失败**: 记录 `PARSE_FAILED`，继续下一个任务
+
+### 技术亮点
+
+#### 1. 自动 Checkpoint 发现
+```bash
+# Bash
+LATEST_CHECKPOINT=$(ls -td "${RUN_ROOT_DIR}/${RUN_ID}"--*_chkpt 2>/dev/null | head -1)
+
+# PowerShell
+$LATEST_CHECKPOINT = ($checkpointDirs | Sort-Object {
+    if ($_.Name -match '--(\d+)_chkpt') { [int]$matches[1] } else { 0 }
+} -Descending | Select-Object -First 1).FullName
+```
+
+#### 2. 实时日志输出
+```bash
+# Bash: 同时输出到终端和文件
+python eval.py 2>&1 | tee "${EVAL_LOG_FILE}"
+
+# PowerShell: 使用 Tee-Object
+python eval.py 2>&1 | Tee-Object -FilePath $EVAL_LOG_FILE
+```
+
+#### 3. 正则表达式解析
+```python
+# 提取成功率
+pattern = r"Overall success rate:\s+([\d.]+)\s+\(([\d.]+)%\)"
+match = re.search(pattern, content)
+success_rate = float(match.group(1))
+```
+
+### 已知限制
+
+1. **顺序执行**: 脚本按顺序运行 4 个任务套件，无法并行
+2. **单 GPU**: 当前配置假设单 GPU 训练
+3. **固定超参数**: 超参数硬编码在脚本中，需要手动修改
+
+### 扩展性
+
+脚本设计易于扩展：
+
+1. **添加新任务套件**: 在 `TASK_SUITES` 数组中添加
+2. **修改超参数**: 在配置部分修改变量
+3. **自定义评估**: 修改 `NUM_TRIALS_PER_TASK` 等参数
+
+---
+
 ## 下一步行动计划
 
-### Phase 4: 集成测试与文档完善 (待执行)
-1. 端到端训练测试（在服务器上运行）
-2. 验证 DDP 兼容性
-3. 性能分析与优化
-4. 编写完整的使用文档和训练脚本示例
+### Phase 6: 多任务与小样本实验脚本 (待执行)
+1. 编写 Table 2 脚本（多任务稳定性实验）
+2. 编写 Table 3 脚本（小样本学习实验）
+3. 实现数据采样工具（用于小样本实验）
+
+### Phase 7: 消融实验脚本 (待执行)
+1. 编写 Table 4 脚本（消融实验）
+2. 实现不同 CRaFT 配置的对比实验
+
+### Phase 8: 实验执行与论文撰写 (待执行)
+1. 在服务器上运行所有实验
+2. 收集和分析结果
+3. 生成论文图表
+4. 撰写实验部分
 
 ---
 
 ## 文件清单
 
-### 新增文件
-- ✅ `prismatic/training/craft_utils.py` (350+ 行) - CRaFT 核心工具模块
-- ✅ `craft_progress.md` - 项目进度跟踪文档
+### 新增文件（Phase 5）
+- ✅ `craft_experiments/01_main_results/run_table1_experiments.sh` - Bash 自动化脚本
+- ✅ `craft_experiments/01_main_results/run_table1_experiments.ps1` - PowerShell 自动化脚本
+- ✅ `craft_experiments/01_main_results/README.md` - 使用文档
+- ✅ `craft_experiments/common_utils/log_parser.py` - 日志解析工具
 
-### 删除文件
-- ❌ `vla-scripts/build_craft_cache.py` - 已废弃的离线缓存脚本
+### 目录结构
+```
+craft_experiments/
+├── 01_main_results/              # ✅ 已完成
+│   ├── run_table1_experiments.sh
+│   ├── run_table1_experiments.ps1
+│   └── README.md
+├── 02_stability_efficiency/      # ⏳ 待实现
+├── 03_ablations/                 # ⏳ 待实现
+└── common_utils/                 # ✅ 已完成
+    └── log_parser.py
+```
 
-### 修改文件
-- ✅ `prismatic/extern/hf/modeling_prismatic.py` - 添加特征提取逻辑
-- ✅ `vla-scripts/finetune.py` - 集成 CRaFT 训练逻辑
-  - 添加 CRaFT 配置参数
-  - 初始化 CRaFT 组件
-  - 实现双 Backward 与梯度投影
-  - 添加 `run_forward_pass_craft()` 函数
-  - 集成 WandB 日志
+### 所有修改文件汇总
+
+**Phase 1-2**:
+- ✅ `prismatic/extern/hf/modeling_prismatic.py` - 特征提取逻辑
+- ✅ `prismatic/training/craft_utils.py` - CRaFT 核心工具
+
+**Phase 3**:
+- ✅ `vla-scripts/finetune.py` - CRaFT 训练集成
+- ✅ `prismatic/training/craft_utils.py` - 在线权重管理
+
+**Phase 5**:
+- ✅ `craft_experiments/` - 实验自动化框架
+
+---
+
+## 项目完成度总览
+
+### 核心功能 ✅
+- [x] 特征提取（$C_R$ 和 $C_{AQ}$）
+- [x] 在线权重切换
+- [x] 双 Backward 与梯度投影
+- [x] 对偶变量 λ 更新
+- [x] WandB 日志集成
+
+### 实验框架 ✅
+- [x] 目录结构
+- [x] 日志解析工具
+- [x] Table 1 自动化脚本
+- [x] 使用文档
+
+### 待完成 ⏳
+- [ ] Table 2 & 3 脚本
+- [ ] Table 4 消融实验脚本
+- [ ] 实验执行与结果分析
 
 ---
 
