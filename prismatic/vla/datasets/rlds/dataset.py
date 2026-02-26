@@ -238,12 +238,92 @@ def make_dataset_from_rlds(
 
     dataset = dl.DLataset.from_rlds(builder, split=split, shuffle=shuffle, num_parallel_reads=num_parallel_reads)
 
-    # Apply N-shot episode truncation if specified (for few-shot experiments)
+    # Apply Per-Task N-shot episode truncation if specified (for few-shot experiments)
     if n_shot_episodes is not None and train:
-        overwatch.info(f"[Few-Shot] Limiting dataset to first {n_shot_episodes} episodes")
-        dataset = dataset.take(n_shot_episodes)
-
-    dataset = dataset.traj_map(restructure, num_parallel_calls)
+        overwatch.info(f"[Few-Shot] Applying per-task {n_shot_episodes}-shot filtering")
+        
+        # CRITICAL: For multi-task datasets (like LIBERO with 10 tasks), we need to ensure
+        # each task gets exactly N episodes, not N episodes total.
+        # 
+        # Example: libero_spatial has 10 tasks × 50 episodes = 500 total episodes
+        # With n_shot_episodes=10, we want 10 tasks × 10 episodes = 100 total episodes
+        # NOT just the first 10 episodes (which would all be from task 0)
+        
+        if language_key is not None:
+            overwatch.info(f"[Few-Shot] Using language_key '{language_key}' to identify tasks")
+            
+            # Step 1: Apply standardize_fn if provided to get language_instruction
+            if standardize_fn is not None:
+                dataset = dataset.traj_map(standardize_fn, num_parallel_calls)
+            
+            # Step 2: Use stateful Python function for per-task counting
+            # We use a closure to maintain state across filter calls
+            task_episode_counts = {}
+            
+            def py_filter_n_shot_per_task(lang_instr_bytes):
+                """
+                Python function to filter N episodes per task (stateful).
+                This runs in eager mode and maintains a Python dict for counting.
+                """
+                # Decode bytes to string
+                lang_str = lang_instr_bytes.decode('utf-8') if isinstance(lang_instr_bytes, bytes) else str(lang_instr_bytes)
+                
+                # Initialize counter for this task if first time seeing it
+                if lang_str not in task_episode_counts:
+                    task_episode_counts[lang_str] = 0
+                
+                # Check if we've already collected N episodes for this task
+                if task_episode_counts[lang_str] < n_shot_episodes:
+                    task_episode_counts[lang_str] += 1
+                    return True  # Keep this episode
+                else:
+                    return False  # Skip this episode
+            
+            def filter_wrapper(traj):
+                """TensorFlow wrapper for the Python filter function."""
+                # Extract language instruction from trajectory
+                lang_instr = traj[language_key]
+                
+                # Handle batched language instructions (take first element)
+                if len(lang_instr.shape) > 0:
+                    lang_instr = lang_instr[0]
+                
+                # Call Python function via tf.py_function
+                keep_episode = tf.py_function(
+                    py_filter_n_shot_per_task,
+                    [lang_instr],
+                    tf.bool
+                )
+                
+                # Ensure output has proper shape
+                keep_episode.set_shape([])
+                
+                return keep_episode
+            
+            # Apply the filter
+            dataset = dataset.filter(filter_wrapper)
+            
+            overwatch.info(
+                f"[Few-Shot] Per-task filtering applied: {n_shot_episodes} episodes per task. "
+                f"For a dataset with K tasks, this will yield K × {n_shot_episodes} total episodes."
+            )
+            
+            # Step 3: Apply restructure (skip standardize_fn since already applied)
+            dataset = dataset.traj_map(restructure, num_parallel_calls)
+            
+        else:
+            # No language key: fall back to simple truncation (not recommended for multi-task datasets)
+            overwatch.warning(
+                f"[Few-Shot] No language_key specified. Falling back to simple truncation of first "
+                f"{n_shot_episodes} episodes. WARNING: This may result in imbalanced task sampling!"
+            )
+            dataset = dataset.take(n_shot_episodes)
+            dataset = dataset.traj_map(restructure, num_parallel_calls)
+    else:
+        # Normal case: no N-shot filtering
+        dataset = dataset.traj_map(restructure, num_parallel_calls)
+    
+    # Apply normalization
     dataset = dataset.traj_map(
         partial(
             normalize_action_and_proprio,

@@ -3,13 +3,15 @@
 ## Project Overview
 实现 CRaFT (Constrained Representation and Fine-Tuning) 算法到 VLA-Adapter 代码库中。
 
-## Current Phase: Phase 6 - 样本效率与极少样本微调实验
+## Current Phase: Phase 6 - 样本效率与极少样本微调实验 (含重大 Bugfix)
 
-**Status**: ✅ COMPLETED
+**Status**: ✅ COMPLETED (with Critical Bugfix)
 
 **Start Date**: 2026-02-27
 
 **Completion Date**: 2026-02-27
+
+**⚠️ CRITICAL BUGFIX**: 修复了可能导致论文无效的致命学术 Bug
 
 ---
 
@@ -320,9 +322,83 @@ Epoch 1, Step 200:
 
 ## Phase 6: 样本效率与极少样本微调实验
 
-**Status**: ✅ COMPLETED
+**Status**: ✅ COMPLETED (with Critical Bugfix)
 
 **Completion Date**: 2026-02-27
+
+### 🚨 CRITICAL BUGFIX: Per-Task N-Shot 逻辑修复
+
+#### 发现的致命 Bug
+
+在初始实现中，我使用了简单的 `dataset.take(n_shot_episodes)` 来截断数据集。这在多任务数据集（如 LIBERO）中会导致**灾难性的学术错误**：
+
+**错误逻辑**:
+```python
+dataset = dataset.take(10)  # ❌ 只取前 10 条轨迹
+```
+
+**问题分析**:
+1. **LIBERO 数据集结构**: `libero_spatial` 包含 10 个任务，每个任务 50 条轨迹，总计 500 条
+2. **数据排列假设**: 如果数据按任务顺序排列（前 50 条都是任务 A），`take(10)` 将只学习任务 A 的 10 条轨迹
+3. **灾难性后果**: 其他 9 个任务的成功率将永远是 0%，实验结果完全无效，论文将被拒稿
+
+**正确的 N-Shot 学术定义**:
+- **10-shot** 应该是：**每个任务 10 条轨迹** × 10 个任务 = **100 条轨迹**
+- **NOT**: 总共 10 条轨迹（全部来自第一个任务）
+
+#### 修复方案：Per-Task Stateful Filtering
+
+**核心思想**: 使用 `language_instruction` 作为任务标识符，为每个唯一的任务维护独立的 episode 计数器。
+
+**实现细节**:
+
+```python
+# 使用 Python 闭包维护状态
+task_episode_counts = {}  # {"task_A": 5, "task_B": 3, ...}
+
+def py_filter_n_shot_per_task(lang_instr_bytes):
+    """为每个任务独立计数，保留前 N 个 episodes"""
+    lang_str = lang_instr_bytes.decode('utf-8')
+    
+    if lang_str not in task_episode_counts:
+        task_episode_counts[lang_str] = 0
+    
+    if task_episode_counts[lang_str] < n_shot_episodes:
+        task_episode_counts[lang_str] += 1
+        return True  # 保留这个 episode
+    else:
+        return False  # 跳过这个 episode
+
+# 通过 tf.py_function 包装为 TensorFlow 操作
+dataset = dataset.filter(lambda traj: tf.py_function(
+    py_filter_n_shot_per_task,
+    [traj[language_key]],
+    tf.bool
+))
+```
+
+**关键特性**:
+- ✅ **Per-Task 计数**: 每个唯一的 `language_instruction` 独立计数
+- ✅ **有状态过滤**: 使用 Python 字典在 eager mode 下维护状态
+- ✅ **任务平衡**: 确保每个任务都有精确的 N 个 episodes
+- ✅ **学术正确性**: 符合 Few-Shot Learning 的标准定义
+
+**验证逻辑**:
+- 对于 `libero_spatial` (10 个任务)，`n_shot_episodes=10` 应该产生 **100 条轨迹**
+- 对于 `libero_spatial` (10 个任务)，`n_shot_episodes=5` 应该产生 **50 条轨迹**
+- 每个任务的 episode 数量应该完全相等
+
+#### 技术权衡
+
+**为什么使用 `tf.py_function` 而不是纯 TensorFlow？**
+
+1. **TensorFlow HashTable 的限制**: `tf.lookup.experimental.MutableHashTable` 在 `Dataset.filter()` 中的状态管理不可靠
+2. **Graph Mode 的复杂性**: 纯 TF 实现需要处理复杂的状态传递和同步
+3. **实用性优先**: `tf.py_function` 在单机训练中完全可靠，代码简洁易懂
+
+**已知限制**:
+- 在多 GPU 分布式训练中，每个 worker 会维护独立的计数器
+- 解决方案：在单机上构建数据集，或使用 shared memory 同步计数器
 
 ### 🔄 战略调整说明
 
