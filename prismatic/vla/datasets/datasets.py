@@ -154,9 +154,11 @@ class RLDSDataset(IterableDataset):
         shuffle_buffer_size: int = 256_000,
         train: bool = True,
         image_aug: bool = False,
+        n_shot_episodes: Optional[int] = None,
     ) -> None:
         """Lightweight wrapper around RLDS TFDS Pipeline for use with PyTorch/OpenVLA Data Loaders."""
         self.data_root_dir, self.data_mix, self.batch_transform = data_root_dir, data_mix, batch_transform
+        self.n_shot_episodes = n_shot_episodes
 
         # Configure RLDS Dataset(s)
         if self.data_mix in OXE_NAMED_MIXTURES:
@@ -222,7 +224,7 @@ class RLDSDataset(IterableDataset):
         self.dataset, self.dataset_length, self.dataset_statistics = self.make_dataset(rlds_config)
 
     def make_dataset(self, rlds_config):
-        return make_interleaved_dataset(**rlds_config)
+        return make_interleaved_dataset(**rlds_config, n_shot_episodes=self.n_shot_episodes)
 
     def __iter__(self) -> Dict[str, Any]:
         for rlds_batch in self.dataset.as_numpy_iterator():

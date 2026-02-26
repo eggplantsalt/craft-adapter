@@ -53,6 +53,7 @@ def make_dataset_from_rlds(
     action_normalization_mask: Optional[List[bool]] = None,
     num_parallel_reads: int = tf.data.AUTOTUNE,
     num_parallel_calls: int = tf.data.AUTOTUNE,
+    n_shot_episodes: Optional[int] = None,
 ) -> Tuple[dl.DLataset, dict]:
     """
     This function is responsible for loading a specific RLDS dataset from storage and getting it into a standardized
@@ -112,6 +113,8 @@ def make_dataset_from_rlds(
             it's always exactly 0 or 1. By default, all action dimensions are normalized.
         num_parallel_reads (int): number of parallel read workers. Default to AUTOTUNE.
         num_parallel_calls (int): number of parallel calls for traj_map operations. Default to AUTOTUNE.
+        n_shot_episodes (int, optional): If provided, limits the dataset to the first N episodes (trajectories).
+            This is used for few-shot learning experiments. If None, uses all available episodes.
     Returns:
         Dataset of trajectories where each step has the following fields:
         - observation:
@@ -234,6 +237,11 @@ def make_dataset_from_rlds(
     split = "train" if train else "val"
 
     dataset = dl.DLataset.from_rlds(builder, split=split, shuffle=shuffle, num_parallel_reads=num_parallel_reads)
+
+    # Apply N-shot episode truncation if specified (for few-shot experiments)
+    if n_shot_episodes is not None and train:
+        overwatch.info(f"[Few-Shot] Limiting dataset to first {n_shot_episodes} episodes")
+        dataset = dataset.take(n_shot_episodes)
 
     dataset = dataset.traj_map(restructure, num_parallel_calls)
     dataset = dataset.traj_map(
@@ -427,6 +435,7 @@ def make_single_dataset(
     train: bool,
     traj_transform_kwargs: dict = {},
     frame_transform_kwargs: dict = {},
+    n_shot_episodes: Optional[int] = None,
 ) -> dl.DLataset:
     """Creates a single dataset from kwargs. Returns a dataset of trajectories.
 
@@ -435,10 +444,12 @@ def make_single_dataset(
         train: whether this is a training or validation dataset.
         traj_transform_kwargs: kwargs passed to 'apply_trajectory_transforms'.
         frame_transform_kwargs: kwargs passed to 'get_frame_transforms'.
+        n_shot_episodes: If provided, limits the dataset to the first N episodes.
     """
     dataset, dataset_statistics = make_dataset_from_rlds(
         **dataset_kwargs,
         train=train,
+        n_shot_episodes=n_shot_episodes,
     )
     dataset = apply_trajectory_transforms(dataset, **traj_transform_kwargs, train=train)
     dataset = apply_frame_transforms(dataset, **frame_transform_kwargs, train=train)
@@ -463,6 +474,7 @@ def make_interleaved_dataset(
     balance_weights: bool = False,
     traj_transform_threads: Optional[int] = None,
     traj_read_threads: Optional[int] = None,
+    n_shot_episodes: Optional[int] = None,
 ) -> dl.DLataset:
     """
     Creates an interleaved dataset from list of dataset configs (kwargs). Returns a dataset of batched frames.
@@ -486,6 +498,7 @@ def make_interleaved_dataset(
             datasets according to their sampling weights. If None, defaults to AUTOTUNE for every dataset.
         traj_read_threads: total number of parallel read workers for trajectory transforms, distributed across
             datasets according to their sampling weights. If None, defaults to AUTOTUNE for every dataset.
+        n_shot_episodes: If provided, limits each dataset to the first N episodes (for few-shot experiments).
     """
     # Default to uniform sampling (if `sample_weights` is not specified)
     if not sample_weights:
@@ -504,7 +517,7 @@ def make_interleaved_dataset(
         data_kwargs = copy.deepcopy(dataset_kwargs)
         if "dataset_frame_transform_kwargs" in data_kwargs:
             data_kwargs.pop("dataset_frame_transform_kwargs")
-        _, dataset_statistics = make_dataset_from_rlds(**data_kwargs, train=train)
+        _, dataset_statistics = make_dataset_from_rlds(**data_kwargs, train=train, n_shot_episodes=n_shot_episodes)
         dataset_sizes.append(dataset_statistics["num_transitions"])
         all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
 
@@ -547,6 +560,7 @@ def make_interleaved_dataset(
             num_parallel_calls=threads,
             num_parallel_reads=reads,
             dataset_statistics=all_dataset_statistics[dataset_kwargs["name"]],
+            n_shot_episodes=n_shot_episodes,
         )
         dataset = apply_trajectory_transforms(
             dataset.repeat(),

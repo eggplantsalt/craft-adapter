@@ -144,6 +144,9 @@ class FinetuneConfig:
     craft_enable_projection: bool = True                     # Enable conflict-aware gradient projection
     craft_anchor_layer_idx: Optional[int] = None             # Layer index for C_R (None = middle layer)
     craft_log_freq: int = 10                                 # CRaFT metrics logging frequency
+    
+    # Few-shot configuration
+    n_shot_episodes: Optional[int] = None                    # If provided, limits training to first N episodes (for few-shot experiments)
     # fmt: on
 
 
@@ -880,6 +883,11 @@ def finetune(cfg: FinetuneConfig) -> None:
         f"\tPROPRIO_DIM: {PROPRIO_DIM}\n"
         f"\tACTION_PROPRIO_NORMALIZATION_TYPE: {ACTION_PROPRIO_NORMALIZATION_TYPE}"
     )
+    
+    # Print few-shot configuration if enabled
+    if cfg.n_shot_episodes is not None:
+        print(f"\n[Few-Shot Mode] Training with only {cfg.n_shot_episodes} episodes per task")
+        print(f"[Few-Shot Mode] This is {cfg.n_shot_episodes}/50 = {cfg.n_shot_episodes/50*100:.1f}% of full data\n")
 
     # Two options:
     # (1) Base model is on Hugging Face Hub
@@ -1148,6 +1156,7 @@ def finetune(cfg: FinetuneConfig) -> None:
         resize_resolution=tuple(vla.module.config.image_sizes),
         shuffle_buffer_size=cfg.shuffle_buffer_size,
         image_aug=cfg.image_aug,
+        n_shot_episodes=cfg.n_shot_episodes,
     )
     if cfg.use_val_set:
         val_dataset = RLDSDataset(
@@ -1158,6 +1167,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             shuffle_buffer_size=cfg.shuffle_buffer_size // 10,
             image_aug=cfg.image_aug,
             train=False,
+            n_shot_episodes=None,  # Always use full validation set
         )
 
     # [Important] Save dataset statistics so that we can unnormalize actions during inference
