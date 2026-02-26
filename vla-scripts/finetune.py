@@ -651,10 +651,11 @@ def save_training_checkpoint(
     train_dataset,
     distributed_state,
     new_state_dict,
-    
+    optimizer=None,
+    scheduler=None,
 ) -> None:
     """
-    Save all training checkpoints including model components, LoRA adapter, and dataset statistics.
+    Save all training checkpoints including model components, LoRA adapter, dataset statistics, and training state.
 
     Args:
         cfg (FinetuneConfig): Training configuration.
@@ -667,6 +668,8 @@ def save_training_checkpoint(
         action_head (nn.Module): Action head module.
         train_dataset (RLDSDataset): Training dataset.
         distributed_state (PartialState): Distributed training state.
+        optimizer (torch.optim.Optimizer): Optimizer instance (for resume training).
+        scheduler (torch.optim.lr_scheduler._LRScheduler): LR scheduler instance (for resume training).
 
     Returns:
         None.
@@ -718,6 +721,18 @@ def save_training_checkpoint(
             torch.save(
                 vla.module.vision_backbone.state_dict(), checkpoint_dir / f"vision_backbone--{checkpoint_name_suffix}"
             )
+        
+        # === Phase 7.5: 保存 Optimizer 和 Scheduler 状态（断点续训支持）===
+        if optimizer is not None:
+            training_state = {
+                'optimizer_state_dict': optimizer.state_dict(),
+                'step': log_step,
+            }
+            if scheduler is not None:
+                training_state['scheduler_state_dict'] = scheduler.state_dict()
+            
+            torch.save(training_state, checkpoint_dir / "training_state.pt")
+            print(f"[Phase 7.5] Saved optimizer and scheduler state for step {log_step}")
 
     # Wait for model components to be saved
     dist.barrier()
@@ -1303,16 +1318,24 @@ def finetune(cfg: FinetuneConfig) -> None:
                 # Clear gradients again
                 optimizer.zero_grad()
                 
-                # Stage 3: Gradient projection and combination
+                # Stage 3: Gradient projection and combination (with conflict tracking)
                 lambda_val = craft_dual_optimizer.get_lambda()
+                
+                # 重置冲突统计计数器
+                craft_gradient_projector.reset_conflict_stats()
                 
                 for name, param in base_model.named_parameters():
                     if param.requires_grad and name in action_grads and name in retention_grads:
                         g_act = action_grads[name].flatten()
                         g_ret = retention_grads[name].flatten()
                         
-                        # Project action gradient if conflict exists
-                        g_act_projected = craft_gradient_projector.project_gradients(g_act, g_ret)
+                        # Project action gradient if conflict exists (返回投影后的梯度和冲突标志)
+                        g_act_projected, has_conflict = craft_gradient_projector.project_gradients(g_act, g_ret)
+                        
+                        # 更新冲突统计
+                        craft_gradient_projector.total_params += 1
+                        if has_conflict:
+                            craft_gradient_projector.num_conflicts += 1
                         
                         # Combine: g_final = g_act_projected + λ * g_ret
                         g_final = g_act_projected + lambda_val * g_ret
@@ -1320,15 +1343,31 @@ def finetune(cfg: FinetuneConfig) -> None:
                         # Reshape and assign back
                         param.grad = g_final.reshape(param.shape)
                 
+                # 计算冲突率（论文核心指标）
+                conflict_ratio = craft_gradient_projector.get_conflict_ratio()
+                
                 # Update dual variable
                 craft_dual_optimizer.step(retention_loss.item())
                 
                 # Add CRaFT metrics
                 metrics['retention_loss'] = retention_loss.item()
                 metrics['lambda'] = lambda_val
+                metrics['conflict_ratio'] = conflict_ratio  # 新增：冲突率统计
             else:
                 # Standard backward pass
-            normalized_loss.backward()
+                normalized_loss.backward()
+            
+            # === 计算梯度范数（用于监控训练稳定性）===
+            # 在 backward 之后、optimizer.step() 之前计算
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                trainable_params, 
+                max_norm=float('inf')  # 不裁剪，只计算范数
+            ).item()
+            metrics['grad_norm'] = grad_norm
+            
+            # === 获取当前学习率 ===
+            current_lr = optimizer.param_groups[0]['lr']
+            metrics['learning_rate'] = current_lr
 
             # Store recent train metrics
             for metric_name, value in metrics.items():
@@ -1346,12 +1385,19 @@ def finetune(cfg: FinetuneConfig) -> None:
             if distributed_state.is_main_process and log_step % cfg.wandb_log_freq == 0:
                 log_metrics_to_wandb(smoothened_metrics, "VLA Train", log_step, wandb)
                 
-                # Log CRaFT-specific metrics
+                # Log CRaFT-specific metrics (包含冲突率)
                 if cfg.use_craft and log_step % cfg.craft_log_freq == 0:
                     wandb.log({
                         "CRaFT/Retention Loss": metrics.get('retention_loss', 0.0),
                         "CRaFT/Lambda": metrics.get('lambda', 0.0),
+                        "CRaFT/Conflict Ratio": metrics.get('conflict_ratio', 0.0),  # 新增：冲突率
                     }, step=log_step)
+                
+                # Log gradient norm and learning rate (顶会级日志)
+                wandb.log({
+                    "VLA Train/Gradient Norm": metrics.get('grad_norm', 0.0),
+                    "VLA Train/Learning Rate": metrics.get('learning_rate', optimizer.param_groups[0]['lr']),
+                }, step=log_step)
 
             # [If applicable] Linearly warm up learning rate from 10% to 100% of original
             if cfg.lr_warmup_steps > 0:
@@ -1361,20 +1407,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                     param_group["lr"] = current_lr
 
             if distributed_state.is_main_process and gradient_step_idx % cfg.wandb_log_freq == 0:
-                # Log the learning rate
-                # Make sure to do this AFTER any learning rate modifications (e.g., warmup/decay)
-                wandb.log(
-                    {
-                        "VLA Train/Learning Rate": scheduler.get_last_lr()[0],
-                    },
-                    step=log_step,
-                )
+                # 已经在上面的日志块中记录了学习率，这里移除重复
+                pass
 
             # Optimizer and LR scheduler step
             if (batch_idx + 1) % cfg.grad_accumulation_steps == 0:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+                
+                # 更新 tqdm 进度条，显示关键指标
+                progress_desc = f"Loss: {metrics.get('loss_value', 0.0):.4f}"
+                if cfg.use_craft:
+                    progress_desc += f" | λ: {metrics.get('lambda', 0.0):.3f} | Conflict: {metrics.get('conflict_ratio', 0.0):.2%}"
+                progress_desc += f" | GradNorm: {metrics.get('grad_norm', 0.0):.2f} | LR: {metrics.get('learning_rate', 0.0):.2e}"
+                progress.set_description(progress_desc)
                 progress.update()
 
             # Save model checkpoint: either keep latest checkpoint only or all checkpoints
@@ -1391,6 +1438,8 @@ def finetune(cfg: FinetuneConfig) -> None:
                     train_dataset=train_dataset,
                     distributed_state=distributed_state,
                     new_state_dict=RAW_STATE_DICT,
+                    optimizer=optimizer,  # Phase 7.5: 传入 optimizer
+                    scheduler=scheduler,  # Phase 7.5: 传入 scheduler
                 )
 
             # Test model on validation set

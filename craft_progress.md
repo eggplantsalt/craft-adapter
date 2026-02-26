@@ -13,6 +13,100 @@
 
 ---
 
+## Phase 7.5: 工程健壮性与顶会级日志增强 (2025-02-27)
+
+**目标**: 在进入文档撰写前，增强代码的工程健壮性和日志丰富度，达到顶会实验标准。
+
+### 核心改进
+
+#### 1. 梯度冲突率统计（论文核心卖点）
+- **修改文件**: `prismatic/training/craft_utils.py`
+- **改动内容**:
+  - `CRaFTGradientProjector` 新增冲突统计功能：
+    - `num_conflicts`: 当前 step 中发生冲突的参数层数量
+    - `total_params`: 当前 step 中参与 CRaFT 的总参数层数量
+    - `reset_conflict_stats()`: 重置冲突统计计数器
+    - `get_conflict_ratio()`: 计算冲突率 = num_conflicts / total_params
+  - `project_gradients()` 返回值改为 `(projected_grad, has_conflict)`，明确标记是否发生冲突
+
+#### 2. 训练循环日志增强
+- **修改文件**: `vla-scripts/finetune.py`
+- **改动内容**:
+  - **梯度范数监控**: 使用 `torch.nn.utils.clip_grad_norm_` 计算全局梯度 L2 范数（不裁剪）
+  - **学习率记录**: 每个 step 记录当前学习率到 metrics
+  - **冲突率统计**: 在 CRaFT 梯度投影阶段统计并记录冲突率
+  - **WandB 日志**: 新增以下指标
+    - `CRaFT/Conflict Ratio`: 梯度冲突率（论文核心证据）
+    - `VLA Train/Gradient Norm`: 梯度范数（训练稳定性监控）
+    - `VLA Train/Learning Rate`: 当前学习率
+  - **tqdm 进度条增强**: 实时显示 Loss、λ、Conflict Ratio、GradNorm、LR
+
+#### 3. 断点续训支持（Optimizer Checkpointing）
+- **修改文件**: `vla-scripts/finetune.py`
+- **改动内容**:
+  - `save_training_checkpoint()` 新增参数 `optimizer` 和 `scheduler`
+  - 保存 `training_state.pt` 包含：
+    - `optimizer_state_dict`: 优化器状态
+    - `scheduler_state_dict`: 学习率调度器状态
+    - `step`: 当前训练步数
+  - 为未来的 Resume 功能留好接口（本阶段只实现保存逻辑）
+
+### 技术细节
+
+#### 冲突率计算逻辑
+```python
+# 在每个 optimizer step 前重置计数器
+craft_gradient_projector.reset_conflict_stats()
+
+# 遍历所有参数层
+for name, param in base_model.named_parameters():
+    if param.requires_grad and name in action_grads and name in retention_grads:
+        g_act = action_grads[name].flatten()
+        g_ret = retention_grads[name].flatten()
+        
+        # 投影并获取冲突标志
+        g_act_projected, has_conflict = craft_gradient_projector.project_gradients(g_act, g_ret)
+        
+        # 更新统计
+        craft_gradient_projector.total_params += 1
+        if has_conflict:
+            craft_gradient_projector.num_conflicts += 1
+
+# 计算冲突率
+conflict_ratio = craft_gradient_projector.get_conflict_ratio()
+```
+
+#### 梯度范数计算
+```python
+# 在 backward 之后、optimizer.step() 之前
+grad_norm = torch.nn.utils.clip_grad_norm_(
+    trainable_params, 
+    max_norm=float('inf')  # 不裁剪，只计算范数
+).item()
+metrics['grad_norm'] = grad_norm
+```
+
+### 论文实验价值
+
+1. **冲突率统计**: 直接证明梯度投影的必要性，展示动作优化和表征保留之间的冲突频率
+2. **梯度范数监控**: 证明训练过程的稳定性，避免梯度爆炸/消失
+3. **学习率追踪**: 完整记录优化过程，便于消融实验分析
+4. **断点续训**: 支持长时间训练的中断恢复，提高实验效率
+
+### 验证清单
+- [x] `craft_utils.py` 冲突统计功能实现
+- [x] `finetune.py` 梯度范数和学习率记录
+- [x] `finetune.py` 冲突率统计集成
+- [x] WandB 日志增强（Conflict Ratio, Gradient Norm, Learning Rate）
+- [x] tqdm 进度条增强
+- [x] Optimizer 和 Scheduler 状态保存
+- [x] 代码注释完善（中文）
+
+### 下一步
+- Phase 8: 工程文档与 README 撰写（中文傻瓜式教程）
+
+---
+
 🎉 **MILESTONE**: 整个 CRaFT 项目的实验代码研发阶段 (Phase 1-7) 正式圆满结束！
 
 ---
