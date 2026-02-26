@@ -45,6 +45,14 @@ from prismatic.training.train_utils import (
     get_current_action_mask,
     get_next_actions_mask
 )
+from prismatic.training.craft_utils import (
+    CRaFTConfig,
+    CRaFTFeatureExtractor,
+    CRaFTGradientProjector,
+    CRaFTDualOptimizer,
+    CRaFTWeightManager,
+    compute_retention_loss,
+)
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction
 from prismatic.vla.action_tokenizer import ActionTokenizer
 from prismatic.vla.constants import (
@@ -125,6 +133,13 @@ class FinetuneConfig:
     # revision version
     use_pro_version: bool = True                             # the version number
     phase: str = "Training"
+    
+    # CRaFT configuration
+    use_craft: bool = False                                  # Enable CRaFT training
+    craft_retention_budget: float = 0.1                      # Maximum allowed representation drift (ε)
+    craft_dual_lr: float = 0.01                              # Learning rate for dual variable (η_λ)
+    craft_projection_eps: float = 1e-8                       # Numerical stability constant (δ)
+    craft_enable_projection: bool = True                     # Enable conflict-aware gradient projection
     # fmt: on
 
 
