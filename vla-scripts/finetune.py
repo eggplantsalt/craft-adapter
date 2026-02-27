@@ -1355,7 +1355,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 metrics['conflict_ratio'] = conflict_ratio  # 新增：冲突率统计
             else:
                 # Standard backward pass
-                normalized_loss.backward()
+            normalized_loss.backward()
             
             # === 计算梯度范数（用于监控训练稳定性）===
             # 在 backward 之后、optimizer.step() 之前计算
