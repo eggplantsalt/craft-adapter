@@ -20,15 +20,19 @@
 ### 1.1 基础训练参数
 
 ```bash
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \      # 预训练模型路径
-    --dataset_name "libero_spatial_no_noops" \     # 数据集名称
-    --batch_size 8 \                               # 每 GPU 的 Batch Size
-    --learning_rate 5e-4 \                         # 学习率
-    --max_steps 20000 \                            # 最大训练步数
-    --grad_accumulation_steps 1 \                  # 梯度累积步数
-    --save_freq 5000 \                             # Checkpoint 保存频率
-    --wandb_project "vla-experiments"              # WandB 项目名称
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \  # 预训练模型路径
+  --config_file_path pretrained_models/configs \                            # 配置路径
+  --data_root_dir data/libero \                                             # 数据集根目录
+  --dataset_name "libero_spatial_no_noops" \                               # 数据集名称
+  --batch_size 4 \                                                           # 每 GPU 的 Batch Size
+  --grad_accumulation_steps 4 \                                              # 梯度累积步数
+  --learning_rate 2e-4 \                                                     # 学习率
+  --num_steps_before_decay 150000 \                                          # LR 衰减里程碑
+  --max_steps 20000 \                                                        # 最大训练步数
+  --save_freq 5000 \                                                         # Checkpoint 保存频率
+  --use_wandb True \                                                         # 是否启用 WandB
+  --wandb_project "vla-experiments"                                          # WandB 项目名称
 ```
 
 **参数说明**：
@@ -48,6 +52,16 @@ python vla-scripts/finetune.py \
 - **`max_steps`**：最大训练步数
   - LIBERO 数据集推荐：20000-50000 步
   - Few-Shot 场景可适当减少
+
+- **`num_steps_before_decay`**：学习率衰减里程碑
+  - 当前脚本使用 MultiStepLR，在该步后将学习率乘以 0.1
+
+- **`use_wandb`**：是否启用 WandB 记录
+  - `True`：初始化 WandB 并记录训练指标
+  - `False`：不初始化 WandB，仅保留终端/本地日志
+
+- **`console_log_freq`**：终端历史日志输出频率（按 step）
+  - 同步写入运行目录下 `train_progress.log`
 
 ### 1.2 动作表示配置
 
@@ -79,14 +93,19 @@ python vla-scripts/finetune.py \
 ### 2.1 Baseline 训练（标准 VLA 微调）
 
 ```bash
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
     --dataset_name "libero_spatial_no_noops" \
-    --batch_size 8 \
-    --learning_rate 5e-4 \
+  --batch_size 4 \
+  --grad_accumulation_steps 4 \
+  --learning_rate 2e-4 \
+  --num_steps_before_decay 150000 \
     --max_steps 20000 \
-    --use_l1_regression True \
     --use_craft False \                            # 关闭 CRaFT
+  --use_wandb False \
+  --console_log_freq 10 \
     --wandb_project "vla-baseline"
 ```
 
@@ -98,19 +117,24 @@ python vla-scripts/finetune.py \
 ### 2.2 CRaFT 训练（约束优化微调）
 
 ```bash
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
     --dataset_name "libero_spatial_no_noops" \
-    --batch_size 8 \
-    --learning_rate 5e-4 \
+  --batch_size 4 \
+  --grad_accumulation_steps 4 \
+  --learning_rate 2e-4 \
+  --num_steps_before_decay 150000 \
     --max_steps 20000 \
-    --use_l1_regression True \
     --use_craft True \                             # 启用 CRaFT
     --craft_retention_budget 0.1 \                 # 表征漂移预算 ε
     --craft_dual_lr 0.01 \                         # 对偶学习率 η_λ
     --craft_enable_projection True \               # 启用梯度投影
     --craft_enable_dual True \                     # 启用自适应 λ
     --craft_anchor_type "concat" \                 # 锚点特征类型
+  --use_wandb True \
+  --console_log_freq 10 \
     --wandb_project "vla-craft"
 ```
 
@@ -174,6 +198,11 @@ python vla-scripts/finetune.py \
   - 训练中期：在某个稳定值附近震荡
   - 训练后期：保持稳定
 - **典型值范围**：0.1-1.0（取决于 `craft_dual_lr` 和 `craft_retention_budget`）
+
+#### `CRaFT/Lambda Before` / `CRaFT/Lambda After`
+- **定义**：同一个 step 内，对偶变量更新前后的 λ
+- **意义**：直接观测该 step 是否触发 λ 更新
+- **经验解读**：若两者都接近 0，通常代表当前 `L_ret <= ε`，不一定是实现问题
 
 #### `CRaFT/Conflict Ratio`（⭐ 梯度冲突率，论文核心指标）
 - **定义**：在所有参数中，出现"动作梯度"与"表征梯度"几何冲突的参数比例
@@ -313,15 +342,25 @@ https://wandb.ai/{your-entity}/{your-project}
 训练过程中，终端会显示实时进度条：
 
 ```
-Loss: 0.1234 | λ: 0.456 | Conflict: 12.34% | GradNorm: 1.23 | LR: 5.00e-04
+Step 1234/20000 | Loss: 0.1234 | Ret: 0.0821/0.1000 | λ: 0.000->0.000 | Conflict: 12.34% | GradNorm: 1.23 | LR: 5.00e-04
 ```
 
 **字段说明**：
+- `Step`：当前 step / 最大 step
 - `Loss`：当前批次的动作损失
-- `λ`：当前的拉格朗日乘子
+- `Ret`：表征保留损失 / 预算 ε
+- `λ`：当前 step 的 λ 更新（前->后）
 - `Conflict`：当前批次的梯度冲突率
 - `GradNorm`：当前批次的梯度范数
 - `LR`：当前学习率
+
+此外，历史日志会按 `console_log_freq` 频率写入运行目录下 `train_progress.log`。
+
+### 5.3 关于 epoch 与 step
+
+- 当前 RLDS 训练链路是 step-driven：底层数据在 interleave 阶段使用 `repeat()` 持续供数。
+- 训练停止条件由 `max_steps` 控制，而不是传统 epoch 结束。
+- 调参与监控应重点关注 step 相关参数（如 `max_steps`、`save_freq`、`wandb_log_freq`、`console_log_freq`）。
 
 ### 5.3 Checkpoint 管理
 
@@ -456,12 +495,17 @@ vla = DDP(vla, device_ids=[device_id], find_unused_parameters=True)
 
 **现象**：WandB 日志未上传到云端。
 
-**原因**：训练脚本中设置了 `mode="offline"`。
+**原因**：训练脚本默认使用 `mode="offline"`，或设置了 `--use_wandb False`。
 
 **解决方案**：
 ```python
 # 修改 finetune.py 中的 WandB 初始化
 wandb.init(project=cfg.wandb_project, name=f"ft+{run_id}", mode="online")  # 改为 online
+```
+
+或直接通过参数关闭 WandB：
+```bash
+--use_wandb False
 ```
 
 ---

@@ -127,9 +127,11 @@ class FinetuneConfig:
     # Logging
     wandb_entity: str = "your-wandb-entity"          # Name of WandB entity
     wandb_project: str = "your-wandb-project"        # Name of WandB project
+    use_wandb: bool = True                            # If False, disable all WandB init/logging
     run_id_note: Optional[str] = None                # Extra note to add to end of run ID for logging
     run_id_override: Optional[str] = None            # Optional string to override the run ID with
     wandb_log_freq: int = 10                         # WandB logging frequency in steps
+    console_log_freq: int = 10                       # Console/history logging frequency in steps
 
     # revision version
     use_pro_version: bool = True                             # the version number
@@ -627,6 +629,9 @@ def log_metrics_to_wandb(metrics, prefix, step, wandb_entity) -> None:
     Returns:
         None.
     """
+    if wandb_entity is None:
+        return
+
     log_dict = {}
     for name, value in metrics.items():
         # Map loss_value to Loss for better readability in W&B
@@ -890,7 +895,7 @@ def finetune(cfg: FinetuneConfig) -> None:
     torch.cuda.empty_cache()
 
     # Initialize wandb logging
-    if distributed_state.is_main_process:
+    if distributed_state.is_main_process and cfg.use_wandb:
         wandb.init(project=cfg.wandb_project, name=f"ft+{run_id}", mode="offline")
 
     # Print detected constants
@@ -1228,8 +1233,11 @@ def finetune(cfg: FinetuneConfig) -> None:
         "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
     }
 
+    console_log_path = run_dir / "train_progress.log"
+    console_log_freq = max(1, cfg.console_log_freq)
+
     # Start training
-    with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
+    with tqdm.tqdm(total=cfg.max_steps, leave=True) as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
@@ -1270,21 +1278,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                     feature_extractor=craft_feature_extractor,
                 )
             else:
-            loss, metrics = run_forward_pass(
-                vla=vla,
-                action_head=action_head,
-                proprio_projector=proprio_projector if cfg.use_proprio else None,
-                batch=batch,
-                action_tokenizer=action_tokenizer,
-                device_id=device_id,
-                use_l1_regression=cfg.use_l1_regression,
-                use_proprio=cfg.use_proprio,
-                use_film=cfg.use_film,
-                num_patches=NUM_PATCHES,
-                compute_diffusion_l1=compute_diffusion_l1,
-                use_pro_version=cfg.use_pro_version,
-                cfg=cfg,
-            )
+                loss, metrics = run_forward_pass(
+                    vla=vla,
+                    action_head=action_head,
+                    proprio_projector=proprio_projector if cfg.use_proprio else None,
+                    batch=batch,
+                    action_tokenizer=action_tokenizer,
+                    device_id=device_id,
+                    use_l1_regression=cfg.use_l1_regression,
+                    use_proprio=cfg.use_proprio,
+                    use_film=cfg.use_film,
+                    num_patches=NUM_PATCHES,
+                    compute_diffusion_l1=compute_diffusion_l1,
+                    use_pro_version=cfg.use_pro_version,
+                    cfg=cfg,
+                )
 
             # Normalize loss to account for gradient accumulation
             normalized_loss = loss / cfg.grad_accumulation_steps
@@ -1348,14 +1356,18 @@ def finetune(cfg: FinetuneConfig) -> None:
                 
                 # Update dual variable
                 craft_dual_optimizer.step(retention_loss.item())
+                lambda_after = craft_dual_optimizer.get_lambda()
                 
                 # Add CRaFT metrics
                 metrics['retention_loss'] = retention_loss.item()
-                metrics['lambda'] = lambda_val
+                metrics['retention_budget'] = cfg.craft_retention_budget
+                metrics['lambda_before'] = lambda_val
+                metrics['lambda_after'] = lambda_after
+                metrics['lambda'] = lambda_after
                 metrics['conflict_ratio'] = conflict_ratio  # 新增：冲突率统计
             else:
                 # Standard backward pass
-            normalized_loss.backward()
+                normalized_loss.backward()
             
             # === 计算梯度范数（用于监控训练稳定性）===
             # 在 backward 之后、optimizer.step() 之前计算
@@ -1383,21 +1395,26 @@ def finetune(cfg: FinetuneConfig) -> None:
             # Push Metrics to W&B (every wandb_log_freq gradient steps)
             log_step = gradient_step_idx if not cfg.resume else cfg.resume_step + gradient_step_idx
             if distributed_state.is_main_process and log_step % cfg.wandb_log_freq == 0:
-                log_metrics_to_wandb(smoothened_metrics, "VLA Train", log_step, wandb)
+                if cfg.use_wandb:
+                    log_metrics_to_wandb(smoothened_metrics, "VLA Train", log_step, wandb)
                 
                 # Log CRaFT-specific metrics (包含冲突率)
-                if cfg.use_craft and log_step % cfg.craft_log_freq == 0:
+                if cfg.use_wandb and cfg.use_craft and log_step % cfg.craft_log_freq == 0:
                     wandb.log({
                         "CRaFT/Retention Loss": metrics.get('retention_loss', 0.0),
+                        "CRaFT/Retention Budget": metrics.get('retention_budget', cfg.craft_retention_budget),
                         "CRaFT/Lambda": metrics.get('lambda', 0.0),
+                        "CRaFT/Lambda Before": metrics.get('lambda_before', 0.0),
+                        "CRaFT/Lambda After": metrics.get('lambda_after', 0.0),
                         "CRaFT/Conflict Ratio": metrics.get('conflict_ratio', 0.0),  # 新增：冲突率
                     }, step=log_step)
                 
                 # Log gradient norm and learning rate (顶会级日志)
-                wandb.log({
-                    "VLA Train/Gradient Norm": metrics.get('grad_norm', 0.0),
-                    "VLA Train/Learning Rate": metrics.get('learning_rate', optimizer.param_groups[0]['lr']),
-                }, step=log_step)
+                if cfg.use_wandb:
+                    wandb.log({
+                        "VLA Train/Gradient Norm": metrics.get('grad_norm', 0.0),
+                        "VLA Train/Learning Rate": metrics.get('learning_rate', optimizer.param_groups[0]['lr']),
+                    }, step=log_step)
 
             # [If applicable] Linearly warm up learning rate from 10% to 100% of original
             if cfg.lr_warmup_steps > 0:
@@ -1415,14 +1432,27 @@ def finetune(cfg: FinetuneConfig) -> None:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+
+                completed_step = (batch_idx + 1) // cfg.grad_accumulation_steps
+                display_step = completed_step if not cfg.resume else cfg.resume_step + completed_step
                 
                 # 更新 tqdm 进度条，显示关键指标
-                progress_desc = f"Loss: {metrics.get('loss_value', 0.0):.4f}"
+                progress_desc = f"Step {display_step}/{cfg.max_steps} | Loss: {metrics.get('loss_value', 0.0):.4f}"
                 if cfg.use_craft:
-                    progress_desc += f" | λ: {metrics.get('lambda', 0.0):.3f} | Conflict: {metrics.get('conflict_ratio', 0.0):.2%}"
+                    progress_desc += (
+                        f" | Ret: {metrics.get('retention_loss', 0.0):.4f}/{metrics.get('retention_budget', cfg.craft_retention_budget):.4f}"
+                        f" | λ: {metrics.get('lambda_before', 0.0):.3f}->{metrics.get('lambda_after', 0.0):.3f}"
+                        f" | Conflict: {metrics.get('conflict_ratio', 0.0):.2%}"
+                    )
                 progress_desc += f" | GradNorm: {metrics.get('grad_norm', 0.0):.2f} | LR: {metrics.get('learning_rate', 0.0):.2e}"
                 progress.set_description(progress_desc)
                 progress.update()
+
+                if distributed_state.is_main_process and display_step % console_log_freq == 0:
+                    history_line = progress_desc
+                    tqdm.tqdm.write(history_line)
+                    with open(console_log_path, "a", encoding="utf-8") as history_log:
+                        history_log.write(history_line + "\n")
 
             # Save model checkpoint: either keep latest checkpoint only or all checkpoints
             if gradient_step_idx > 0 and log_step % cfg.save_freq == 0:

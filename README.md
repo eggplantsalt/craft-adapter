@@ -62,15 +62,26 @@ cd ..
 
 ```bash
 # 测试 Baseline 训练 (不使用 CRaFT)
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \
+data_name=libero_spatial_no_noops
+
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
     --dataset_name "libero_spatial_no_noops" \
-    --batch_size 8 \
-    --learning_rate 5e-4 \
+  --batch_size 4 \
+  --grad_accumulation_steps 4 \
+  --learning_rate 2e-4 \
+  --num_steps_before_decay 150000 \
     --max_steps 5000 \
-    --use_l1_regression True \
+  --use_minivlm True \
+  --use_proprio True \
+  --num_images_in_input 2 \
+  --use_lora True \
+  --lora_rank 64 \
     --use_craft False \
-    --wandb_project "vla-baseline-test"
+  --use_wandb False \
+  --console_log_freq 10
 ```
 
 如果上述命令能正常运行并开始训练，说明环境配置正确。
@@ -79,19 +90,31 @@ python vla-scripts/finetune.py \
 
 ```bash
 # CRaFT 训练 (启用所有核心功能)
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \
+data_name=libero_spatial_no_noops
+
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
     --dataset_name "libero_spatial_no_noops" \
-    --batch_size 8 \
-    --learning_rate 5e-4 \
+  --batch_size 4 \
+  --grad_accumulation_steps 4 \
+  --learning_rate 2e-4 \
+  --num_steps_before_decay 150000 \
     --max_steps 20000 \
-    --use_l1_regression True \
+  --use_minivlm True \
+  --use_proprio True \
+  --num_images_in_input 2 \
+  --use_lora True \
+  --lora_rank 64 \
     --use_craft True \
     --craft_retention_budget 0.1 \
     --craft_dual_lr 0.01 \
     --craft_enable_projection True \
     --craft_enable_dual True \
-    --wandb_project "vla-craft-training"
+  --use_wandb True \
+  --wandb_project "vla-craft-training" \
+  --console_log_freq 10
 ```
 
 **关键参数说明**：
@@ -100,6 +123,9 @@ python vla-scripts/finetune.py \
 - `--craft_dual_lr 0.01`：对偶变量学习率 η_λ
 - `--craft_enable_projection True`：启用冲突感知梯度投影
 - `--craft_enable_dual True`：启用自适应 λ 更新
+- `--num_steps_before_decay`：学习率衰减里程碑（MultiStepLR）
+- `--use_wandb`：是否启用 WandB 初始化与日志记录
+- `--console_log_freq`：终端逐行历史日志打印频率（step）
 
 ---
 
@@ -168,11 +194,17 @@ CRaFT 训练过程中，WandB 会记录以下关键指标：
 #### CRaFT 核心指标 (⭐ 论文关键证据)
 - `CRaFT/Retention Loss`：表征保留损失 L_ret (衡量表征漂移程度)
 - `CRaFT/Lambda`：拉格朗日乘子 λ 的动态变化
+- `CRaFT/Lambda Before`：当前 step 对偶更新前的 λ
+- `CRaFT/Lambda After`：当前 step 对偶更新后的 λ
 - **`CRaFT/Conflict Ratio`**：**梯度冲突率** (证明表征坍塌与梯度冲突的核心指标)
 
 #### 工程健壮性指标 (Phase 7.5 新增)
 - `VLA Train/Gradient Norm`：梯度范数 (监控训练稳定性)
 - `VLA Train/Learning Rate`：学习率变化曲线
+
+#### 终端历史日志
+- 训练会在运行目录下写入 `train_progress.log`（按 `--console_log_freq` 频率）
+- 终端显示格式为：`Step 当前/总步数 | Loss | Ret(若启用 CRaFT) | λ(before->after) | Conflict | GradNorm | LR`
 
 **梯度冲突率的物理意义**：
 - 该指标统计了在所有参数中，有多少比例的参数出现了"动作梯度"与"表征梯度"的几何冲突 (内积 < 0)
@@ -319,15 +351,19 @@ This project implements **CRaFT (Constrained Representation and Fine-Tuning)** o
 ```bash
 # Install dependencies
 pip install -e .
-pip install -r requirements.txt
 
 # Run CRaFT training
-python vla-scripts/finetune.py \
-    --config_file_path "openvla/openvla-7b" \
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
     --dataset_name "libero_spatial_no_noops" \
+  --num_steps_before_decay 150000 \
     --use_craft True \
     --craft_retention_budget 0.1 \
-    --craft_dual_lr 0.01
+  --craft_dual_lr 0.01 \
+  --use_wandb True \
+  --console_log_freq 10
 ```
 
 For detailed documentation, see:

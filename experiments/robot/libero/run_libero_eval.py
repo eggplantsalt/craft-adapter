@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import sys
+
+sys.path.append("/workspace/LIBERO")
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum

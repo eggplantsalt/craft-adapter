@@ -151,3 +151,30 @@ data/
 # Rollout videos and wandb logs
 rollouts/
 wandb/
+
+# ===== Project-specific large artifacts =====
+# Training outputs / experiment logs
+outputs/
+logs/
+eval_logs/
+
+# Local model & dataset artifacts
+pretrained_models/
+data/
+checkpoints/
+
+# Common large binary artifacts
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.h5
+*.npy
+*.npz
+*.pkl
+*.tar
+*.tar.gz
+*.zip
+*.7z

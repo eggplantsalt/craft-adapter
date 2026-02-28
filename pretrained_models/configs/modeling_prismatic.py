@@ -288,6 +288,10 @@ class PrismaticCausalLMOutputWithPast(ModelOutput):
     # Additions for VLMs
     projector_features: Optional[torch.FloatTensor] = None
 
+    # CRaFT: Bridging features for representation retention
+    raw_latent_features: Optional[torch.FloatTensor] = None      # C_R: Raw latent from intermediate layer
+    action_query_features: Optional[torch.FloatTensor] = None    # C_AQ: Action query latent from final layer
+
 
 
 class PrismaticPreTrainedModel(PreTrainedModel):
@@ -534,6 +538,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         output_projector_features: Optional[bool] = None,
+        output_craft_features: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         proprio=None,
         proprio_projector=None,
@@ -548,13 +553,16 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         output_projector_features = output_projector_features if output_projector_features is not None else False
+        output_craft_features = output_craft_features if output_craft_features is not None else False
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # Respect `use_cache` only if not training (even if `gradient_checkpointing` is off)
         use_cache = use_cache and not self.training
 
-        # Instantiate Placeholder for Projector Features
+        # Instantiate Placeholder for Projector Features and CRaFT Features
         projected_patch_embeddings = None
+        raw_latent_features = None
+        action_query_features = None
 
         # === Handle Generation with Cache (`input_ids.shape[1] == 1`) =>> requires `past_keys_values` ===
         if input_ids.shape[1] == 1:
@@ -670,6 +678,37 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 f"=> `use_cache` = {use_cache}"
             )
 
+        # === Extract CRaFT Bridging Features (if requested) ===
+        if output_craft_features and output_hidden_states and (language_model_output.hidden_states is not None):
+            # Extract features only during multimodal forward (when we have vision patches and action queries)
+            if projected_patch_embeddings is not None and labels is not None:
+                hidden_states = language_model_output.hidden_states
+                num_layers = len(hidden_states)
+                
+                # Get number of vision patches (accounting for proprio if present)
+                num_patches = projected_patch_embeddings.shape[1]
+                
+                # Compute action query positions
+                all_actions_mask = self._process_action_masks(labels)
+                num_action_tokens = all_actions_mask.sum(dim=1)[0].item()  # Assume same for all batch items
+                
+                # Get prompt length (excluding BOS token and action tokens)
+                prompt_length = input_ids.shape[1] - 1  # Subtract BOS
+                
+                # Calculate positions in multimodal sequence
+                # Sequence structure: [BOS, vision_patches, prompt_tokens, action_queries, STOP]
+                action_start_idx = 1 + num_patches + prompt_length
+                action_end_idx = action_start_idx + num_action_tokens
+                
+                # Extract C_R: Raw latent from intermediate layer (middle layer)
+                anchor_layer_idx = num_layers // 2
+                intermediate_hidden = hidden_states[anchor_layer_idx]  # (B, seq_len, D)
+                raw_latent_features = intermediate_hidden[:, 1:1+num_patches, :]  # Extract vision patches only
+                
+                # Extract C_AQ: Action query latent from final layer
+                final_hidden = hidden_states[-1]  # (B, seq_len, D)
+                action_query_features = final_hidden[:, action_start_idx:action_end_idx, :]  # Extract action queries
+
         # Unpack `language_model_output` and return PrismaticCausalLMOutputWithPast (or tuple if not `return_dict`)
         if not return_dict:
             if output_projector_features and (projected_patch_embeddings is not None):
@@ -683,6 +722,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             hidden_states=language_model_output.hidden_states,
             attentions=language_model_output.attentions,
             projector_features=projected_patch_embeddings,
+            raw_latent_features=raw_latent_features,
+            action_query_features=action_query_features,
             )
 
 
