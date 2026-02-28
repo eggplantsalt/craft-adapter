@@ -365,7 +365,21 @@ def compute_retention_loss(
     Returns:
         标量损失值（MSE）
     """
-    return torch.nn.functional.mse_loss(current_features, anchor_features)
+    # Use float32 for numerical stability, and sanitize non-finite feature values
+    # to avoid NaN retention loss causing stalled dual updates (lambda stuck at 0).
+    current_features_fp32 = torch.nan_to_num(
+        current_features.float(),
+        nan=0.0,
+        posinf=1e4,
+        neginf=-1e4,
+    )
+    anchor_features_fp32 = torch.nan_to_num(
+        anchor_features.float(),
+        nan=0.0,
+        posinf=1e4,
+        neginf=-1e4,
+    )
+    return torch.nn.functional.mse_loss(current_features_fp32, anchor_features_fp32)
 
 
 class CRaFTWeightManager:
@@ -472,6 +486,8 @@ def extract_anchor_features_online(
     use_proprio: bool = False,
     proprio_projector: Optional[nn.Module] = None,
     use_film: bool = False,
+    anchor_layer_idx: Optional[int] = None,
+    cr_token_mode: str = "vision_only",
 ) -> torch.Tensor:
     """
     使用在线权重切换提取锚点特征（无梯度模式）
@@ -518,6 +534,8 @@ def extract_anchor_features_online(
                 labels=batch["labels"].to(device),
                 output_hidden_states=True,
                 output_craft_features=True,
+                craft_anchor_layer_idx=anchor_layer_idx,
+                craft_cr_token_mode=cr_token_mode,
                 proprio=batch["proprio"] if use_proprio else None,
                 proprio_projector=proprio_projector if use_proprio else None,
                 use_film=use_film,

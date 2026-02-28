@@ -21,18 +21,24 @@
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
-  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \  # 预训练模型路径
-  --config_file_path pretrained_models/configs \                            # 配置路径
-  --data_root_dir data/libero \                                             # 数据集根目录
-  --dataset_name "libero_spatial_no_noops" \                               # 数据集名称
-  --batch_size 4 \                                                           # 每 GPU 的 Batch Size
-  --grad_accumulation_steps 4 \                                              # 梯度累积步数
-  --learning_rate 2e-4 \                                                     # 学习率
-  --num_steps_before_decay 150000 \                                          # LR 衰减里程碑
-  --max_steps 20000 \                                                        # 最大训练步数
-  --save_freq 5000 \                                                         # Checkpoint 保存频率
-  --use_wandb True \                                                         # 是否启用 WandB
-  --wandb_project "vla-experiments"                                          # WandB 项目名称
+  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+  --config_file_path pretrained_models/configs \
+  --data_root_dir data/libero \
+  --dataset_name "libero_spatial_no_noops" \
+  --batch_size 4 \
+  --grad_accumulation_steps 4 \
+  --learning_rate 2e-4 \
+  --num_steps_before_decay 150000 \
+  --max_steps 20000 \
+  --save_freq 5000 \
+  --use_wandb True \
+  --wandb_project "vla-experiments"
+```
+
+也可以直接使用仓库内置参数化脚本：
+
+```bash
+bash vla-scripts/run_finetune_libero.sh
 ```
 
 **参数说明**：
@@ -97,16 +103,16 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
   --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
   --config_file_path pretrained_models/configs \
   --data_root_dir data/libero \
-    --dataset_name "libero_spatial_no_noops" \
+  --dataset_name "libero_spatial_no_noops" \
   --batch_size 4 \
   --grad_accumulation_steps 4 \
   --learning_rate 2e-4 \
   --num_steps_before_decay 150000 \
-    --max_steps 20000 \
-    --use_craft False \                            # 关闭 CRaFT
+  --max_steps 20000 \
+  --use_craft False \
   --use_wandb False \
   --console_log_freq 10 \
-    --wandb_project "vla-baseline"
+  --wandb_project "vla-baseline"
 ```
 
 **Baseline 特点**：
@@ -121,21 +127,21 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
   --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
   --config_file_path pretrained_models/configs \
   --data_root_dir data/libero \
-    --dataset_name "libero_spatial_no_noops" \
+  --dataset_name "libero_spatial_no_noops" \
   --batch_size 4 \
   --grad_accumulation_steps 4 \
   --learning_rate 2e-4 \
   --num_steps_before_decay 150000 \
-    --max_steps 20000 \
-    --use_craft True \                             # 启用 CRaFT
-    --craft_retention_budget 0.1 \                 # 表征漂移预算 ε
-    --craft_dual_lr 0.01 \                         # 对偶学习率 η_λ
-    --craft_enable_projection True \               # 启用梯度投影
-    --craft_enable_dual True \                     # 启用自适应 λ
-    --craft_anchor_type "concat" \                 # 锚点特征类型
+  --max_steps 20000 \
+  --use_craft True \
+  --craft_retention_budget 0.1 \
+  --craft_dual_lr 0.01 \
+  --craft_enable_projection True \
+  --craft_enable_dual True \
+  --craft_anchor_type "concat" \
   --use_wandb True \
   --console_log_freq 10 \
-    --wandb_project "vla-craft"
+  --wandb_project "vla-craft"
 ```
 
 **CRaFT 核心参数详解**：
@@ -148,6 +154,8 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
 | `craft_enable_dual` | True | True/False | 是否启用自适应 λ（False 则使用固定 λ） |
 | `craft_fixed_lambda` | 0.1 | 0.01-1.0 | 当 `enable_dual=False` 时的固定 λ 值 |
 | `craft_anchor_type` | "concat" | concat/aq_only/raw_only | 锚点特征类型（消融实验用） |
+| `craft_anchor_layer_idx` | None | 整数 | C_R 的 hidden_states 层索引（None=中间层，负数=从末尾倒数） |
+| `craft_cr_token_mode` | vision_only | vision_only/vision_plus_prompt | C_R 使用的 token 范围 |
 
 ---
 
@@ -187,6 +195,11 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
   - 持续上升超过 ε：对偶学习率 `craft_dual_lr` 过小
   - 始终接近 0：`craft_retention_budget` 过小，模型被过度约束
 
+#### `CRaFT/Retention NonFinite`
+- **定义**：表征保留损失是否出现非有限数（`NaN/Inf`）的标记（0 或 1）
+- **意义**：用于快速定位异常 batch 的数值稳定性问题
+- **期望值**：长期保持 0
+
 #### `CRaFT/Lambda`（拉格朗日乘子）
 - **定义**：对偶变量 λ，控制表征保留损失的权重
 - **更新规则**：`λ ← max(0, λ + η_λ × (L_ret - ε))`
@@ -205,8 +218,8 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
 - **经验解读**：若两者都接近 0，通常代表当前 `L_ret <= ε`，不一定是实现问题
 
 #### `CRaFT/Conflict Ratio`（⭐ 梯度冲突率，论文核心指标）
-- **定义**：在所有参数中，出现"动作梯度"与"表征梯度"几何冲突的参数比例
-- **计算公式**：`Conflict Ratio = (冲突参数数量) / (总参数数量)`
+- **定义**：在当前 step 中，参与 CRaFT 梯度合并的参数张量里，出现"动作梯度"与"表征梯度"几何冲突的张量比例
+- **计算公式**：`Conflict Ratio = (冲突参数张量数) / (总参数张量数)`
 - **冲突判定**：当 `<g_act, g_ret> < 0` 时，认为发生冲突
 - **物理意义**：
   - **高冲突率 (>30%)**：模型正在经历严重的表征坍塌，动作优化与表征保留存在大量冲突
@@ -277,12 +290,12 @@ bash run_table1_experiments.sh
 
 ### 4.2 极少样本实验（Few-Shot）
 
-**脚本位置**：`craft_experiments/02_stability_efficiency/run_fewshot_experiments.sh`
+**脚本位置**：`craft_experiments/02_stability_efficiency/run_table2_fewshot.sh`
 
 **运行方式**：
 ```bash
 cd craft_experiments/02_stability_efficiency
-bash run_fewshot_experiments.sh
+bash run_table2_fewshot.sh
 ```
 
 **实验内容**：
@@ -299,12 +312,12 @@ bash run_fewshot_experiments.sh
 
 ### 4.3 消融实验（Ablation Study）
 
-**脚本位置**：`craft_experiments/03_ablations/run_ablation_experiments.sh`
+**脚本位置**：`craft_experiments/03_ablations/run_table4_ablations.sh`
 
 **运行方式**：
 ```bash
 cd craft_experiments/03_ablations
-bash run_ablation_experiments.sh
+bash run_table4_ablations.sh
 ```
 
 **实验内容**：
@@ -384,16 +397,27 @@ runs/experiment-name--10000_chkpt/
 
 ```bash
 python vla-scripts/finetune.py \
-    --config_file_path "runs/experiment-name--10000_chkpt" \
+  --config_file_path "outputs/experiment-name--10000_chkpt" \
     --resume True \
     --resume_step 10000 \
+  --resum_vla_path "outputs/experiment-name--10000_chkpt" \
     --max_steps 20000 \
     --use_craft True
 ```
 
+或使用仓库脚本（推荐）：
+
+```bash
+RESUME=True \
+RESUME_STEP=10000 \
+RESUME_VLA_PATH=outputs/experiment-name--10000_chkpt \
+bash vla-scripts/run_finetune_libero.sh
+```
+
 **说明**：
-- `training_state.pt` 包含 Optimizer 和 Scheduler 的完整状态
-- 续训后会从 Step 10001 开始，学习率和动量等状态完全恢复
+- 脚本会校验 `RESUME_STEP` 与 `RESUME_VLA_PATH` 是否匹配，并在可推断时自动修正 step
+- 当前主流程恢复的是模块 checkpoint（如 `action_head`、`proprio_projector` 等）并从 `resume_step` 继续计步
+- `training_state.pt` 已保存 Optimizer/Scheduler 状态，用于后续扩展完整状态恢复
 
 ---
 

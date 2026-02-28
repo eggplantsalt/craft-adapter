@@ -77,11 +77,8 @@ wget https://example.com/libero_long_no_noops.tar.gz
 如果您需要从原始 LIBERO HDF5 文件转换为 RLDS 格式：
 
 ```bash
-# 使用 VLA-Adapter 提供的转换脚本
-python prismatic/vla/datasets/rlds/libero_converter.py \
-    --input_dir /path/to/libero/raw/data \
-    --output_dir datasets/rlds/libero_spatial_no_noops \
-    --suite spatial
+# 当前仓库未内置 LIBERO -> RLDS 的一键转换脚本
+# 请先在外部完成转换，再将产物放到 --data_root_dir 对应目录下
 ```
 
 ---
@@ -162,6 +159,9 @@ python vla-scripts/finetune.py \
 
 代码会自动拼接完整路径：`datasets/rlds/libero_spatial_no_noops/`
 
+说明：仓库内置脚本 `vla-scripts/run_finetune_libero.sh` 的默认值是 `--data_root_dir data/libero`，
+只要目录下包含对应数据集子目录（如 `data/libero/libero_spatial_no_noops`）即可正常读取。
+
 ### 4.3 验证数据集路径
 
 运行以下命令检查数据集是否正确加载：
@@ -169,7 +169,6 @@ python vla-scripts/finetune.py \
 ```bash
 python -c "
 from prismatic.vla.datasets import RLDSDataset
-from prismatic.vla.datasets.rlds import RLDSBatchTransform
 
 dataset = RLDSDataset(
     data_root_dir='datasets/rlds',
@@ -200,7 +199,7 @@ CRaFT 支持 **Few-Shot 学习实验**，通过 `--n_shot_episodes` 参数限制
    - `--n_shot_episodes 10`：每个任务使用 10/50 = 20% 的数据
    - `--n_shot_episodes 5`：每个任务使用 5/50 = 10% 的数据
 
-3. **实现位置**：`prismatic/vla/datasets/rlds/libero.py` 中的数据加载逻辑
+3. **实现位置**：`prismatic/vla/datasets/rlds/dataset.py` 与 `prismatic/vla/datasets/datasets.py` 中的数据加载逻辑
 
 ### 5.2 使用示例
 

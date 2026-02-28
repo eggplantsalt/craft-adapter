@@ -5,6 +5,7 @@ Fine-tunes Qwen2.5-0.5B via LoRA.
 """
 
 import os
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -148,6 +149,7 @@ class FinetuneConfig:
     craft_fixed_lambda: float = 0.1                          # Fixed lambda when craft_enable_dual=False
     craft_anchor_type: str = "concat"                        # Anchor feature type: 'concat', 'aq_only', 'raw_only'
     craft_anchor_layer_idx: Optional[int] = None             # Layer index for C_R (None = middle layer)
+    craft_cr_token_mode: str = "vision_only"                # C_R token scope: 'vision_only' | 'vision_plus_prompt'
     craft_log_freq: int = 10                                 # CRaFT metrics logging frequency
     
     # Few-shot configuration
@@ -514,6 +516,8 @@ def run_forward_pass_craft(
             labels=batch["labels"],
             output_hidden_states=True,
             output_craft_features=True,  # Enable CRaFT feature extraction
+            craft_anchor_layer_idx=cfg.craft_anchor_layer_idx,
+            craft_cr_token_mode=cfg.craft_cr_token_mode,
             proprio=batch["proprio"] if use_proprio else None,
             proprio_projector=proprio_projector if use_proprio else None,
             noisy_actions=None,
@@ -1235,9 +1239,10 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     console_log_path = run_dir / "train_progress.log"
     console_log_freq = max(1, cfg.console_log_freq)
+    use_tqdm_bar = sys.stdout.isatty()
 
     # Start training
-    with tqdm.tqdm(total=cfg.max_steps, leave=True) as progress:
+    with tqdm.tqdm(total=cfg.max_steps, leave=True, disable=not use_tqdm_bar) as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
@@ -1254,6 +1259,8 @@ def finetune(cfg: FinetuneConfig) -> None:
                     use_proprio=cfg.use_proprio,
                     proprio_projector=proprio_projector if cfg.use_proprio else None,
                     use_film=cfg.use_film,
+                    anchor_layer_idx=cfg.craft_anchor_layer_idx,
+                    cr_token_mode=cfg.craft_cr_token_mode,
                 )  # (B, 2*D), detached
             
             # === Standard Forward Pass (with gradient) ===
@@ -1314,6 +1321,9 @@ def finetune(cfg: FinetuneConfig) -> None:
                 
                 # Stage 2: Compute retention loss and backward
                 retention_loss = compute_retention_loss(current_features, anchor_features)
+                retention_nonfinite = not torch.isfinite(retention_loss).item()
+                if retention_nonfinite:
+                    retention_loss = (current_features * 0.0).sum()
                 retention_loss_scaled = retention_loss / cfg.grad_accumulation_steps
                 retention_loss_scaled.backward()
                 
@@ -1360,6 +1370,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 
                 # Add CRaFT metrics
                 metrics['retention_loss'] = retention_loss.item()
+                metrics['retention_nonfinite'] = float(retention_nonfinite)
                 metrics['retention_budget'] = cfg.craft_retention_budget
                 metrics['lambda_before'] = lambda_val
                 metrics['lambda_after'] = lambda_after
@@ -1402,6 +1413,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 if cfg.use_wandb and cfg.use_craft and log_step % cfg.craft_log_freq == 0:
                     wandb.log({
                         "CRaFT/Retention Loss": metrics.get('retention_loss', 0.0),
+                        "CRaFT/Retention NonFinite": metrics.get('retention_nonfinite', 0.0),
                         "CRaFT/Retention Budget": metrics.get('retention_budget', cfg.craft_retention_budget),
                         "CRaFT/Lambda": metrics.get('lambda', 0.0),
                         "CRaFT/Lambda Before": metrics.get('lambda_before', 0.0),
@@ -1441,18 +1453,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                 if cfg.use_craft:
                     progress_desc += (
                         f" | Ret: {metrics.get('retention_loss', 0.0):.4f}/{metrics.get('retention_budget', cfg.craft_retention_budget):.4f}"
+                        f" | RetNF: {int(metrics.get('retention_nonfinite', 0.0))}"
                         f" | λ: {metrics.get('lambda_before', 0.0):.3f}->{metrics.get('lambda_after', 0.0):.3f}"
                         f" | Conflict: {metrics.get('conflict_ratio', 0.0):.2%}"
                     )
                 progress_desc += f" | GradNorm: {metrics.get('grad_norm', 0.0):.2f} | LR: {metrics.get('learning_rate', 0.0):.2e}"
-                progress.set_description(progress_desc)
-                progress.update()
+                if use_tqdm_bar:
+                    progress.set_description(progress_desc)
+                    progress.update()
 
                 if distributed_state.is_main_process and display_step % console_log_freq == 0:
                     history_line = progress_desc
-                    tqdm.tqdm.write(history_line)
                     with open(console_log_path, "a", encoding="utf-8") as history_log:
                         history_log.write(history_line + "\n")
+                    if not use_tqdm_bar:
+                        print(history_line, flush=True)
 
             # Save model checkpoint: either keep latest checkpoint only or all checkpoints
             if gradient_step_idx > 0 and log_step % cfg.save_freq == 0:

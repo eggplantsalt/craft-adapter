@@ -117,12 +117,20 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
   --console_log_freq 10
 ```
 
+或使用仓库内置参数化启动脚本（推荐）：
+
+```bash
+bash vla-scripts/run_finetune_libero.sh
+```
+
 **关键参数说明**：
 - `--use_craft True`：启用 CRaFT 训练框架
 - `--craft_retention_budget 0.1`：表征漂移预算 ε (论文核心超参数)
 - `--craft_dual_lr 0.01`：对偶变量学习率 η_λ
 - `--craft_enable_projection True`：启用冲突感知梯度投影
 - `--craft_enable_dual True`：启用自适应 λ 更新
+- `--craft_anchor_layer_idx`：C_R 的 hidden_states 层索引（不传=中间层；负数=从末尾倒数）
+- `--craft_cr_token_mode`：C_R token 范围（`vision_only` 或 `vision_plus_prompt`）
 - `--num_steps_before_decay`：学习率衰减里程碑（MultiStepLR）
 - `--use_wandb`：是否启用 WandB 初始化与日志记录
 - `--console_log_freq`：终端逐行历史日志打印频率（step）
@@ -147,9 +155,9 @@ VLA-Adapter/
 │   ├── 01_main_results/                # 主实验：Table 1 (LIBERO 四个 Suite)
 │   │   └── run_table1_experiments.sh   # 自动化脚本：Baseline vs CRaFT
 │   ├── 02_stability_efficiency/        # 极少样本实验 (5-shot, 10-shot)
-│   │   └── run_fewshot_experiments.sh
+│   │   └── run_table2_fewshot.sh
 │   └── 03_ablations/                   # 消融实验 (梯度投影、对偶优化、锚点类型)
-│       └── run_ablation_experiments.sh
+│       └── run_table4_ablations.sh
 │
 ├── craft_experiments/common_utils/     # 实验辅助工具
 │   └── log_parser.py                   # ⭐ 日志解析器 (提取 WandB 指标、生成 LaTeX 表格)
@@ -233,7 +241,7 @@ bash run_table1_experiments.sh
 
  ```bash
 cd craft_experiments/02_stability_efficiency
-bash run_fewshot_experiments.sh
+bash run_table2_fewshot.sh
 ```
 
 测试 CRaFT 在 5-shot 和 10-shot 场景下的表现。
@@ -242,7 +250,7 @@ bash run_fewshot_experiments.sh
 
  ```bash
 cd craft_experiments/03_ablations
-bash run_ablation_experiments.sh
+bash run_table4_ablations.sh
 ```
 
 包含：
@@ -273,22 +281,34 @@ python craft_experiments/common_utils/log_parser.py \
 
 ### 🛠️ 断点续训
 
-CRaFT 支持完整的断点续训功能（Phase 7.5 新增）：
+CRaFT 支持从指定 checkpoint 目录恢复权重继续训练：
 
 ```bash
 # 从 Step 10000 的 Checkpoint 继续训练
 python vla-scripts/finetune.py \
-    --config_file_path "runs/your-experiment-name--10000_chkpt" \
+  --config_file_path "outputs/your-experiment--10000_chkpt" \
     --resume True \
     --resume_step 10000 \
+  --resum_vla_path "outputs/your-experiment--10000_chkpt" \
     --max_steps 20000 \
     --use_craft True
+```
+
+推荐使用启动脚本（含 step/path 一致性校验）：
+
+```bash
+RESUME=True \
+RESUME_STEP=10000 \
+RESUME_VLA_PATH=outputs/your-experiment--10000_chkpt \
+bash vla-scripts/run_finetune_libero.sh
 ```
 
 保存的 `training_state.pt` 包含：
 - Optimizer 状态 (Adam 的动量和二阶矩估计)
 - LR Scheduler 状态
 - 当前训练步数
+
+说明：当前续训主流程会恢复各模块 checkpoint（如 `action_head`、`proprio_projector` 等）并按 `resume_step` 续跑；`training_state.pt` 已保存用于后续扩展完整状态恢复。
 
 ---
 
@@ -352,18 +372,8 @@ This project implements **CRaFT (Constrained Representation and Fine-Tuning)** o
 # Install dependencies
 pip install -e .
 
-# Run CRaFT training
-CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-scripts/finetune.py \
-  --vlm_path pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
-  --config_file_path pretrained_models/configs \
-  --data_root_dir data/libero \
-    --dataset_name "libero_spatial_no_noops" \
-  --num_steps_before_decay 150000 \
-    --use_craft True \
-    --craft_retention_budget 0.1 \
-  --craft_dual_lr 0.01 \
-  --use_wandb True \
-  --console_log_freq 10
+# Run CRaFT training (recommended launcher)
+bash vla-scripts/run_finetune_libero.sh
 ```
 
 For detailed documentation, see:
@@ -391,11 +401,11 @@ bash run_table1_experiments.sh
 
 # Few-shot experiments
 cd craft_experiments/02_stability_efficiency
-bash run_fewshot_experiments.sh
+bash run_table2_fewshot.sh
 
 # Ablation studies
 cd craft_experiments/03_ablations
-bash run_ablation_experiments.sh
+bash run_table4_ablations.sh
 ```
 
 ---

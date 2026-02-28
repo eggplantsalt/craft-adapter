@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-02-28: 文档与新开关/续训流程全面对齐
+
+### 修改文件
+- 📝 `README.md`
+  - **改动**: 新增 `craft_anchor_layer_idx`、`craft_cr_token_mode` 参数说明
+  - **改动**: 更新断点续训示例（补充 `--resum_vla_path`）
+  - **改动**: 增加 `run_finetune_libero.sh` 的续训用法示例
+
+- 📝 `docs/EXPERIMENTS_AND_TRAINING.md`
+  - **改动**: 在 CRaFT 参数表中新增 `craft_anchor_layer_idx`、`craft_cr_token_mode`
+  - **改动**: 将冲突率定义改为当前实现口径（按参数张量计数）
+  - **改动**: 更新断点续训说明，与脚本校验逻辑和当前代码行为保持一致
+
+- 📝 `docs/DATASETS.md`
+  - **改动**: 补充 `data/libero` 与 `datasets/rlds` 两种 `data_root_dir` 用法说明
+
+---
+
 ## 2026-02-28: 训练文档与代码行为同步
 
 ### 修改文件
