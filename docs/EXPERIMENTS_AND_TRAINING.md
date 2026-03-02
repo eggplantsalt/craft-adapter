@@ -44,10 +44,10 @@ bash vla-scripts/run_finetune_libero.sh
 日志模式示例：
 
 ```bash
-# 原版风格（单行动态进度）
+# 原版风格：终端单行动态进度
 USE_TEE=False VLA_CONSOLE_MODE=tqdm bash vla-scripts/run_finetune_libero.sh
 
-# 逐行日志（适合 tee/非TTY）
+# 历史日志风格：逐行打印（适合 tee / 非TTY）
 USE_TEE=True VLA_CONSOLE_MODE=line bash vla-scripts/run_finetune_libero.sh
 ```
 
@@ -66,9 +66,9 @@ USE_TEE=True VLA_CONSOLE_MODE=line bash vla-scripts/run_finetune_libero.sh
   - CRaFT 推荐：5e-4（与 Baseline 保持一致）
 
 - **`max_steps`**：最大训练步数
-  - 这里按“优化步（optimizer step）”理解
-  - `grad_accumulation_steps=K` 时，每 `K` 个 micro-batch 才更新 1 次参数
-  - 实际更新数近似为：`floor(有效 batch 数 / K)`，并受 `max_steps` 上限约束
+  - 按“优化步（optimizer step）”理解，而不是 batch 数
+  - 当 `grad_accumulation_steps=K` 时，每 `K` 个 micro-batch 才更新 1 次参数
+  - 实际更新数近似 `floor(len(dataloader)/K)`，同时不超过 `max_steps`
 
 - **`num_steps_before_decay`**：学习率衰减里程碑
   - 当前脚本使用 MultiStepLR，在该步后将学习率乘以 0.1
@@ -81,9 +81,9 @@ USE_TEE=True VLA_CONSOLE_MODE=line bash vla-scripts/run_finetune_libero.sh
   - 同步写入运行目录下 `train_progress.log`
 
 - **`VLA_CONSOLE_MODE`**（环境变量，启动脚本读取）
-  - `auto`：TTY 使用 `tqdm`，非TTY 使用逐行日志
-  - `tqdm`：单行动态进度条
-  - `line`：逐行打印
+  - `auto`：TTY 用 `tqdm`，非TTY 用逐行打印
+  - `tqdm`：单行动态进度
+  - `line`：逐行历史日志
 
 ### 1.2 动作表示配置
 
@@ -385,16 +385,16 @@ Step 1234/20000 | Loss: 0.1234 | Ret: 0.0821/0.1000 | λ: 0.000->0.000 | Conflic
 
 此外，历史日志会按 `console_log_freq` 频率写入运行目录下 `train_progress.log`。
 
-日志输出模式由 `VLA_CONSOLE_MODE` 控制：
-- `tqdm`：终端只显示一条动态刷新进度（原版行为）
-- `line`：每个 step 输出一行（便于 `tee` 保存）
+终端输出模式可通过 `VLA_CONSOLE_MODE` 控制：
+- `tqdm`：始终单行刷新（原版观感）
+- `line`：按频率逐行打印
 - `auto`：根据是否为 TTY 自动选择
 
 ### 5.3 关于 epoch 与 step
 
-- 当前训练循环是“单次遍历 dataloader + `max_steps` 上限”模式：可能先到达数据边界，也可能先到达步数上限。
-- `grad_accumulation_steps=K` 时，每 `K` 个 batch 才计 1 个优化步。
-- 调参与监控应同时关注 `max_steps` 与 `grad_accumulation_steps`，避免把 batch 数误当成参数更新数。
+- 当前训练循环受两个条件共同约束：dataloader 实际可提供的 batch 数，以及 `max_steps` 上限。
+- 使用梯度累积时，每 `grad_accumulation_steps` 个 batch 才计 1 个优化步。
+- 调参与监控应同时关注 `max_steps` 与 `grad_accumulation_steps`，避免把 batch 数误当成更新步数。
 
 经验公式：
 

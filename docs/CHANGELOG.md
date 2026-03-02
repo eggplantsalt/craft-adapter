@@ -4,22 +4,25 @@
 
 ---
 
-## 2026-03-02: 日志模式与步数语义对齐
+## 2026-03-02: 文档与当前训练代码二次对齐
 
 ### 修改文件
 - 📝 `README.md`
-  - **改动**: 新增 `USE_TEE` + `VLA_CONSOLE_MODE` 的运行示例（`tqdm`/`line`）
-  - **改动**: 明确 `max_steps` 在梯度累积下按优化步理解，补充更新步数估算公式
-  - **改动**: 同步终端日志模式说明（动态单行 vs 逐行打印）
+  - **改动**: 新增 `USE_TEE` + `VLA_CONSOLE_MODE` 的推荐运行方式（`tqdm`/`line`）
+  - **改动**: 明确 `max_steps` 在梯度累积下表示优化步，补充有效更新步估算示例
+  - **改动**: 补充终端日志模式说明（单行动态 vs 逐行打印）
 
 - 📝 `docs/EXPERIMENTS_AND_TRAINING.md`
-  - **改动**: 同步 `VLA_CONSOLE_MODE` 三种模式及脚本使用示例
-  - **改动**: 修正 `max_steps`、`grad_accumulation_steps` 与真实参数更新次数的关系
-  - **改动**: 更新 step 终止逻辑说明，补充可执行优化步估算公式
+  - **改动**: 新增日志模式控制说明（`VLA_CONSOLE_MODE=auto|tqdm|line`）
+  - **改动**: 修正 `max_steps` 与 `grad_accumulation_steps` 的关系，避免把 batch 数误解为更新步数
+  - **改动**: 更新 step 语义与训练停止条件说明，并加入经验公式
 
 - 📝 `docs/DATASETS.md`
-  - **改动**: 新增 dataloader 长度与梯度累积对有效训练步数影响的说明与示例
+  - **改动**: 补充 `len(dataloader)` 与梯度累积共同决定有效更新步数的说明与示例
 
+- 📝 `docs/craft/PROJECT_STRUCTURE.md`
+  - **改动**: 刷新 docs 目录树为当前实际结构
+  - **改动**: 移除过期的 `docs/zh-CN` 待创建描述，更新快速导航
 
 ## 2026-02-28: 文档与新开关/续训流程全面对齐
 

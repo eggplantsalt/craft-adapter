@@ -20,17 +20,17 @@ RUN_ROOT_DIR=${RUN_ROOT_DIR:-outputs}
 
 # Resume / checkpoint
 RESUME=${RESUME:-True}                          # True | False
-RESUME_STEP=${RESUME_STEP:-10}                   # e.g. 2500
-RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--10_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
+RESUME_STEP=${RESUME_STEP:-400}                   # e.g. 2500
+RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--400_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
 
 # Training hyperparameters
 BATCH_SIZE=${BATCH_SIZE:-4}
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-8}
 LEARNING_RATE=${LEARNING_RATE:-8e-5}
 LORA_RANK=${LORA_RANK:-64}
-MAX_STEPS=${MAX_STEPS:-500}
+MAX_STEPS=${MAX_STEPS:-1001}
 NUM_STEPS_BEFORE_DECAY=${NUM_STEPS_BEFORE_DECAY:-45}
-SAVE_FREQ=${SAVE_FREQ:-100}
+SAVE_FREQ=${SAVE_FREQ:-300}
 SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE:-2000}
 
 # Logging

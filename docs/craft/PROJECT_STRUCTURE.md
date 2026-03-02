@@ -1,7 +1,7 @@
 # VLA-Adapter + CRaFT 项目目录结构
 
-**更新时间**: 2025-02-27  
-**版本**: Step 1 & 2 完成后
+**更新时间**: 2026-03-02  
+**版本**: 与当前训练脚本行为对齐
 
 ---
 
@@ -15,23 +15,20 @@ VLA-Adapter/
 ├── 📄 pyproject.toml                               # Python 项目配置
 ├── 📄 our_envs.txt                                 # 环境依赖列表
 │
-├── 📁 docs/                                        # 📚 文档目录
-│   ├── 📄 CHANGELOG.md                             # ✅ 文档变更日志（新建）
+├── 📁 docs/                                        # 📚 文档目录（当前有效）
+│   ├── 📄 CHANGELOG.md                             # 文档变更日志
+│   ├── 📄 DATASETS.md                              # 数据集准备与路径规则
+│   ├── 📄 EXPERIMENTS_AND_TRAINING.md              # 训练与评估指南
 │   ├── 🔒 CONTEXT.md                               # 项目上下文（受保护）
 │   ├── 🔒 IDEA.md                                  # CRaFT 核心思想（受保护）
-│   ├── 📁 craft/                                   # ✅ CRaFT 开发文档（新建目录）
-│   │   ├── 📄 craft_progress.md                    # 开发进度记录
-│   │   ├── 📄 PHASE_7.5_SUMMARY.md                 # Phase 7.5 完成报告
-│   │   └── 📄 STEP1_2_COMPLETION_REPORT.md         # Step 1&2 完成报告
-│   └── 📁 zh-CN/                                   # 🔜 中文文档目录（待填充）
-│       ├── 📄 01_项目结构指南.md                   # 待创建
-│       ├── 📄 02_快速开始.md                       # 待创建
-│       ├── 📄 03_数据集准备.md                     # 待创建
-│       ├── 📄 04_训练指南.md                       # 待创建
-│       ├── 📄 05_评估指南.md                       # 待创建
-│       ├── 📄 06_架构深度解析.md                   # 待创建
-│       ├── 📄 07_故障排查.md                       # 待创建
-│       └── 📄 08_API参考.md                        # 待创建
+│   └── 📁 craft/                                   # CRaFT 开发与归档文档
+│       ├── 📄 craft_progress.md                    # 开发进度记录
+│       ├── 📄 FINAL_COMPLETION_SUMMARY.md          # 阶段总结
+│       ├── 📄 PHASE_7.5_SUMMARY.md                 # Phase 7.5 完成报告
+│       ├── 📄 PROJECT_COMPLETION_REPORT.md         # 项目完成报告
+│       ├── 📄 PROJECT_STRUCTURE.md                 # 本文档
+│       ├── 📄 STEP1_2_COMPLETION_REPORT.md         # Step1/2 完成报告
+│       └── 📄 STEP1_2_FINAL_REPORT.md              # Step1/2 最终报告
 │
 ├── 📁 prismatic/                                   # 🧠 核心模型代码
 │   ├── 📁 training/                                # 训练相关模块
@@ -134,9 +131,10 @@ VLA-Adapter/
 
 | 文件路径 | 说明 | 状态 |
 |---------|------|------|
-| `docs/CHANGELOG.md` | 文档变更日志 | ✅ 已创建 |
+| `docs/CHANGELOG.md` | 文档变更日志 | ✅ 已维护 |
+| `docs/DATASETS.md` | 数据集与路径说明 | ✅ 已维护 |
+| `docs/EXPERIMENTS_AND_TRAINING.md` | 训练与调试指南 | ✅ 已维护 |
 | `docs/craft/craft_progress.md` | 开发进度记录 | ✅ 已归档 |
-| `docs/zh-CN/*.md` | 中文文档体系（8个文档） | 🔜 待创建 |
 
 ---
 
@@ -203,7 +201,7 @@ VLA-Adapter/
 
 ### 我是...
 
-- **新手开发者** → 等待 `docs/zh-CN/02_快速开始.md`（Step 3 创建）
+- **新手开发者** → 先读 `README.md` + `docs/EXPERIMENTS_AND_TRAINING.md`
 - **论文复现者** → 查看 `craft_experiments/*/README.md` 和实验脚本
 - **代码贡献者** → 阅读 `docs/CONTEXT.md` 和 `craft_utils.py`
 - **文档维护者** → 遵循 `docs/CHANGELOG.md` 的记录规范

@@ -181,16 +181,16 @@ print(f'Dataset loaded successfully! Total episodes: {len(dataset)}')
 "
 ```
 
-### 4.4 估算可训练步数（避免 `max_steps` 误判）
+### 4.4 结合梯度累积估算有效训练步数
 
-当使用梯度累积时，参数更新次数由 dataloader 长度和 `grad_accumulation_steps` 共同决定。
+训练时，参数更新次数由 `len(dataloader)` 和 `grad_accumulation_steps` 共同决定：
 
 ```text
 可执行优化步 ≈ floor(len(dataloader) / grad_accumulation_steps)
 实际训练步 = min(max_steps, 可执行优化步)
 ```
 
-例如：`len(dataloader)=500` 且 `grad_accumulation_steps=8`，则最多约 `62` 次参数更新。
+示例：若 `len(dataloader)=500` 且 `grad_accumulation_steps=8`，最多约 `62` 次参数更新。
 
 ---
 
