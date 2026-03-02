@@ -24,7 +24,7 @@ RESUME_STEP=${RESUME_STEP:-10}                   # e.g. 2500
 RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--10_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
 
 # Training hyperparameters
-BATCH_SIZE=${BATCH_SIZE:-2}
+BATCH_SIZE=${BATCH_SIZE:-4}
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-8}
 LEARNING_RATE=${LEARNING_RATE:-2e-4}
 LORA_RANK=${LORA_RANK:-64}
@@ -34,12 +34,13 @@ SAVE_FREQ=${SAVE_FREQ:-100}
 SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE:-2000}
 
 # Logging
-USE_WANDB=${USE_WANDB:-False}                    # True | False
+USE_WANDB=${USE_WANDB:-True}                    # True | False
 WANDB_ENTITY=${WANDB_ENTITY:-qzy84511}
 WANDB_PROJECT=${WANDB_PROJECT:-$DATA_NAME}
 WANDB_LOG_FREQ=${WANDB_LOG_FREQ:-10}
 CONSOLE_LOG_FREQ=${CONSOLE_LOG_FREQ:-10}
-USE_TEE=${USE_TEE:-False}                        # True=pipe to tee (no tqdm ETA), False=keep tqdm ETA
+USE_TEE=${USE_TEE:-True}                        # True=pipe to tee (no tqdm ETA), False=keep tqdm ETA
+VLA_CONSOLE_MODE=${VLA_CONSOLE_MODE:-auto}       # auto | tqdm | line
 
 # CRaFT hyperparameters (only used when MODE=craft)
 CRAFT_RETENTION_BUDGET=${CRAFT_RETENTION_BUDGET:-0.005}
@@ -182,6 +183,14 @@ echo "[INFO] Dataset: $DATA_NAME"
 echo "[INFO] GPUs: $CUDA_VISIBLE_DEVICES | nproc_per_node=$NPROC_PER_NODE"
 echo "[INFO] Log: $LOG_FILE"
 echo "[INFO] Use tee: $USE_TEE"
+
+if [[ "$VLA_CONSOLE_MODE" == "auto" ]]; then
+  if [[ "$USE_TEE" == "True" ]]; then
+    VLA_CONSOLE_MODE="line"
+  fi
+fi
+echo "[INFO] Console mode: $VLA_CONSOLE_MODE"
+
 echo "[INFO] Resume: $RESUME"
 if [[ "$RESUME" == "True" ]]; then
   echo "[INFO] Resume step: $RESUME_STEP"
@@ -190,7 +199,7 @@ fi
 
 if [[ "$USE_TEE" == "True" ]]; then
   # shellcheck disable=SC2086
-  CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
+  VLA_CONSOLE_MODE="$VLA_CONSOLE_MODE" CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
     --standalone \
     --nnodes "$NNODES" \
     --nproc-per-node "$NPROC_PER_NODE" \
@@ -202,7 +211,7 @@ if [[ "$USE_TEE" == "True" ]]; then
 else
   # Keep stdout as TTY so finetune.py can enable tqdm progress bar + ETA
   # shellcheck disable=SC2086
-  CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
+  VLA_CONSOLE_MODE="$VLA_CONSOLE_MODE" CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
     --standalone \
     --nnodes "$NNODES" \
     --nproc-per-node "$NPROC_PER_NODE" \

@@ -1239,7 +1239,20 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     console_log_path = run_dir / "train_progress.log"
     console_log_freq = max(1, cfg.console_log_freq)
-    use_tqdm_bar = distributed_state.is_main_process
+
+    console_mode = os.environ.get("VLA_CONSOLE_MODE", "auto").strip().lower()
+    if console_mode not in {"auto", "tqdm", "line"}:
+        console_mode = "auto"
+
+    if console_mode == "tqdm":
+        use_tqdm_bar = distributed_state.is_main_process
+        use_line_console = False
+    elif console_mode == "line":
+        use_tqdm_bar = False
+        use_line_console = distributed_state.is_main_process
+    else:
+        use_tqdm_bar = distributed_state.is_main_process and sys.stdout.isatty()
+        use_line_console = distributed_state.is_main_process and (not use_tqdm_bar)
 
     # Start training
     with tqdm.tqdm(total=cfg.max_steps, leave=False, disable=not use_tqdm_bar) as progress:
@@ -1459,8 +1472,11 @@ def finetune(cfg: FinetuneConfig) -> None:
                     )
                 progress_desc += f" | GradNorm: {metrics.get('grad_norm', 0.0):.2f} | LR: {metrics.get('learning_rate', 0.0):.2e}"
                 if use_tqdm_bar:
+                    progress.set_description(progress_desc, refresh=False)
                     progress.update()
-                    progress.set_description(progress_desc)
+
+                if use_line_console and display_step % console_log_freq == 0:
+                    print(progress_desc, flush=True)
 
                 if distributed_state.is_main_process and display_step % console_log_freq == 0:
                     history_line = progress_desc
