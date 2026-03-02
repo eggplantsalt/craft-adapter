@@ -546,6 +546,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         noisy_action_projector=None,
         diffusion_timestep_embeddings=None,
         use_film: bool = False,
+        craft_anchor_layer_idx: Optional[int] = None,
+        craft_cr_token_mode: Optional[str] = None,
     ) -> Union[Tuple, PrismaticCausalLMOutputWithPast]:
         """Run a forward pass through the VLM, returning a PrismaticCausalLMOutputWithPast instance."""
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -700,10 +702,37 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 action_start_idx = 1 + num_patches + prompt_length
                 action_end_idx = action_start_idx + num_action_tokens
                 
-                # Extract C_R: Raw latent from intermediate layer (middle layer)
-                anchor_layer_idx = num_layers // 2
-                intermediate_hidden = hidden_states[anchor_layer_idx]  # (B, seq_len, D)
-                raw_latent_features = intermediate_hidden[:, 1:1+num_patches, :]  # Extract vision patches only
+                # Extract C_R: Raw latent from configurable layer
+                # - None => middle layer
+                # - >=0  => absolute hidden-state index
+                # - <0   => index from the end (python-style)
+                if craft_anchor_layer_idx is None:
+                    resolved_anchor_layer_idx = num_layers // 2
+                else:
+                    resolved_anchor_layer_idx = int(craft_anchor_layer_idx)
+                    if resolved_anchor_layer_idx < 0:
+                        resolved_anchor_layer_idx = num_layers + resolved_anchor_layer_idx
+                    resolved_anchor_layer_idx = max(0, min(resolved_anchor_layer_idx, num_layers - 1))
+
+                intermediate_hidden = hidden_states[resolved_anchor_layer_idx]  # (B, seq_len, D)
+
+                # Select token scope for C_R
+                # - vision_only: [BOS, vision_patches, ...] -> only vision patch tokens
+                # - vision_plus_prompt: include both vision patch tokens and prompt tokens
+                resolved_cr_token_mode = "vision_only" if craft_cr_token_mode is None else str(craft_cr_token_mode)
+                if resolved_cr_token_mode == "vision_only":
+                    cr_start_idx = 1
+                    cr_end_idx = 1 + num_patches
+                elif resolved_cr_token_mode == "vision_plus_prompt":
+                    cr_start_idx = 1
+                    cr_end_idx = 1 + num_patches + prompt_length
+                else:
+                    raise ValueError(
+                        f"Invalid craft_cr_token_mode: {resolved_cr_token_mode}. "
+                        f"Must be 'vision_only' or 'vision_plus_prompt'"
+                    )
+
+                raw_latent_features = intermediate_hidden[:, cr_start_idx:cr_end_idx, :]
                 
                 # Extract C_AQ: Action query latent from final layer
                 final_hidden = hidden_states[-1]  # (B, seq_len, D)

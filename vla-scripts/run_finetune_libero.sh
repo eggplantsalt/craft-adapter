@@ -20,25 +20,26 @@ RUN_ROOT_DIR=${RUN_ROOT_DIR:-outputs}
 
 # Resume / checkpoint
 RESUME=${RESUME:-True}                          # True | False
-RESUME_STEP=${RESUME_STEP:-500}                   # e.g. 2500
-RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b4+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260228_193036--500_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
+RESUME_STEP=${RESUME_STEP:-10}                   # e.g. 2500
+RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--10_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
 
 # Training hyperparameters
-BATCH_SIZE=${BATCH_SIZE:-8}
+BATCH_SIZE=${BATCH_SIZE:-2}
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-8}
 LEARNING_RATE=${LEARNING_RATE:-2e-4}
 LORA_RANK=${LORA_RANK:-64}
-MAX_STEPS=${MAX_STEPS:-5000}
-NUM_STEPS_BEFORE_DECAY=${NUM_STEPS_BEFORE_DECAY:-1800}
-SAVE_FREQ=${SAVE_FREQ:-1000}
+MAX_STEPS=${MAX_STEPS:-500}
+NUM_STEPS_BEFORE_DECAY=${NUM_STEPS_BEFORE_DECAY:-380}
+SAVE_FREQ=${SAVE_FREQ:-100}
 SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE:-2000}
 
 # Logging
-USE_WANDB=${USE_WANDB:-True}                    # True | False
+USE_WANDB=${USE_WANDB:-False}                    # True | False
 WANDB_ENTITY=${WANDB_ENTITY:-qzy84511}
 WANDB_PROJECT=${WANDB_PROJECT:-$DATA_NAME}
 WANDB_LOG_FREQ=${WANDB_LOG_FREQ:-10}
 CONSOLE_LOG_FREQ=${CONSOLE_LOG_FREQ:-10}
+USE_TEE=${USE_TEE:-False}                        # True=pipe to tee (no tqdm ETA), False=keep tqdm ETA
 
 # CRaFT hyperparameters (only used when MODE=craft)
 CRAFT_RETENTION_BUDGET=${CRAFT_RETENTION_BUDGET:-0.005}
@@ -180,19 +181,33 @@ echo "[INFO] Mode: $MODE"
 echo "[INFO] Dataset: $DATA_NAME"
 echo "[INFO] GPUs: $CUDA_VISIBLE_DEVICES | nproc_per_node=$NPROC_PER_NODE"
 echo "[INFO] Log: $LOG_FILE"
+echo "[INFO] Use tee: $USE_TEE"
 echo "[INFO] Resume: $RESUME"
 if [[ "$RESUME" == "True" ]]; then
   echo "[INFO] Resume step: $RESUME_STEP"
   echo "[INFO] Resume path: $RESUME_VLA_PATH"
 fi
 
-# shellcheck disable=SC2086
-CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
-  --standalone \
-  --nnodes "$NNODES" \
-  --nproc-per-node "$NPROC_PER_NODE" \
-  vla-scripts/finetune.py \
-  "${COMMON_ARGS[@]}" \
-  "${MODE_ARGS[@]}" \
-  $EXTRA_ARGS \
-  2>&1 | tee "$LOG_FILE"
+if [[ "$USE_TEE" == "True" ]]; then
+  # shellcheck disable=SC2086
+  CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
+    --standalone \
+    --nnodes "$NNODES" \
+    --nproc-per-node "$NPROC_PER_NODE" \
+    vla-scripts/finetune.py \
+    "${COMMON_ARGS[@]}" \
+    "${MODE_ARGS[@]}" \
+    $EXTRA_ARGS \
+    2>&1 | tee "$LOG_FILE"
+else
+  # Keep stdout as TTY so finetune.py can enable tqdm progress bar + ETA
+  # shellcheck disable=SC2086
+  CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" torchrun \
+    --standalone \
+    --nnodes "$NNODES" \
+    --nproc-per-node "$NPROC_PER_NODE" \
+    vla-scripts/finetune.py \
+    "${COMMON_ARGS[@]}" \
+    "${MODE_ARGS[@]}" \
+    $EXTRA_ARGS
+fi

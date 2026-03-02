@@ -1239,10 +1239,10 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     console_log_path = run_dir / "train_progress.log"
     console_log_freq = max(1, cfg.console_log_freq)
-    use_tqdm_bar = sys.stdout.isatty()
+    use_tqdm_bar = distributed_state.is_main_process
 
     # Start training
-    with tqdm.tqdm(total=cfg.max_steps, leave=True, disable=not use_tqdm_bar) as progress:
+    with tqdm.tqdm(total=cfg.max_steps, leave=False, disable=not use_tqdm_bar) as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
@@ -1459,18 +1459,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                     )
                 progress_desc += f" | GradNorm: {metrics.get('grad_norm', 0.0):.2f} | LR: {metrics.get('learning_rate', 0.0):.2e}"
                 if use_tqdm_bar:
-                    progress.set_description(progress_desc)
                     progress.update()
+                    progress.set_description(progress_desc)
 
                 if distributed_state.is_main_process and display_step % console_log_freq == 0:
                     history_line = progress_desc
                     with open(console_log_path, "a", encoding="utf-8") as history_log:
                         history_log.write(history_line + "\n")
-                    if not use_tqdm_bar:
-                        print(history_line, flush=True)
 
-            # Save model checkpoint: either keep latest checkpoint only or all checkpoints
-            if gradient_step_idx > 0 and log_step % cfg.save_freq == 0:
+            # Save model checkpoint only on optimizer-step boundaries.
+            # This avoids repeated saves/log spam when grad accumulation > 1.
+            if (
+                (batch_idx + 1) % cfg.grad_accumulation_steps == 0
+                and gradient_step_idx > 0
+                and log_step % cfg.save_freq == 0
+            ):
                 save_training_checkpoint(
                     cfg=cfg,
                     run_dir=run_dir,
