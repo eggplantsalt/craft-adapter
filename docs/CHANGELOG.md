@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-03-02: 日志模式与步数语义对齐
+
+### 修改文件
+- 📝 `README.md`
+  - **改动**: 新增 `USE_TEE` + `VLA_CONSOLE_MODE` 的运行示例（`tqdm`/`line`）
+  - **改动**: 明确 `max_steps` 在梯度累积下按优化步理解，补充更新步数估算公式
+  - **改动**: 同步终端日志模式说明（动态单行 vs 逐行打印）
+
+- 📝 `docs/EXPERIMENTS_AND_TRAINING.md`
+  - **改动**: 同步 `VLA_CONSOLE_MODE` 三种模式及脚本使用示例
+  - **改动**: 修正 `max_steps`、`grad_accumulation_steps` 与真实参数更新次数的关系
+  - **改动**: 更新 step 终止逻辑说明，补充可执行优化步估算公式
+
+- 📝 `docs/DATASETS.md`
+  - **改动**: 新增 dataloader 长度与梯度累积对有效训练步数影响的说明与示例
+
+
 ## 2026-02-28: 文档与新开关/续训流程全面对齐
 
 ### 修改文件

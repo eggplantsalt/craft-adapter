@@ -123,6 +123,16 @@ CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nnodes 1 --nproc-per-node 1 vla-s
 bash vla-scripts/run_finetune_libero.sh
 ```
 
+常用脚本运行方式（与当前代码行为一致）：
+
+```bash
+# 1) 原版风格：tqdm 单行动态进度（推荐交互终端）
+USE_TEE=False VLA_CONSOLE_MODE=tqdm bash vla-scripts/run_finetune_libero.sh
+
+# 2) 逐行历史日志：每个 step 输出一行（推荐 tee/非TTY）
+USE_TEE=True VLA_CONSOLE_MODE=line bash vla-scripts/run_finetune_libero.sh
+```
+
 **关键参数说明**：
 - `--use_craft True`：启用 CRaFT 训练框架
 - `--craft_retention_budget 0.1`：表征漂移预算 ε (论文核心超参数)
@@ -134,6 +144,12 @@ bash vla-scripts/run_finetune_libero.sh
 - `--num_steps_before_decay`：学习率衰减里程碑（MultiStepLR）
 - `--use_wandb`：是否启用 WandB 初始化与日志记录
 - `--console_log_freq`：终端逐行历史日志打印频率（step）
+- `VLA_CONSOLE_MODE`（环境变量）：`auto` / `tqdm` / `line`（控制终端输出模式）
+
+**关于 `max_steps` 与梯度累积（重要）**：
+- `grad_accumulation_steps=K` 时，每 `K` 个 micro-batch 才执行 1 次 `optimizer.step()`。
+- 真实参数更新次数近似为：`floor(有效 batch 数 / K)`，并受 `max_steps` 上限约束。
+- 因此如果 dataloader 实际只提供约 500 个 batch 且 `K=8`，参数更新约为 `500/8≈62` 次。
 
 ---
 
@@ -213,6 +229,7 @@ CRaFT 训练过程中，WandB 会记录以下关键指标：
 #### 终端历史日志
 - 训练会在运行目录下写入 `train_progress.log`（按 `--console_log_freq` 频率）
 - 终端显示格式为：`Step 当前/总步数 | Loss | Ret(若启用 CRaFT) | λ(before->after) | Conflict | GradNorm | LR`
+- `VLA_CONSOLE_MODE=tqdm` 时为单行动态刷新；`VLA_CONSOLE_MODE=line` 时为逐行打印（便于 `tee` 落盘）
 
 **梯度冲突率的物理意义**：
 - 该指标统计了在所有参数中，有多少比例的参数出现了"动作梯度"与"表征梯度"的几何冲突 (内积 < 0)
