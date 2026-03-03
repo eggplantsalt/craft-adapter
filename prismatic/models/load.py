@@ -154,6 +154,31 @@ def load_vla(
         assert config_json.exists(), f"Missing `config.json` for `{run_dir = }`"
         assert dataset_statistics_json.exists(), f"Missing `dataset_statistics.json` for `{run_dir = }`"
 
+    # Local run directory =>> identify checkpoint from `<RUN_DIR>/checkpoints/*.pt`
+    elif os.path.isdir(model_id_or_path):
+        run_dir = Path(model_id_or_path)
+        overwatch.info(f"Loading from local run directory `{run_dir}`")
+
+        config_json, dataset_statistics_json = run_dir / "config.json", run_dir / "dataset_statistics.json"
+        assert config_json.exists(), f"Missing `config.json` for `{run_dir = }`"
+        assert dataset_statistics_json.exists(), f"Missing `dataset_statistics.json` for `{run_dir = }`"
+
+        checkpoints_dir = run_dir / "checkpoints"
+        assert checkpoints_dir.exists(), f"Missing checkpoints directory for `{run_dir = }`"
+
+        if step_to_load is not None:
+            matches = sorted(checkpoints_dir.glob(f"step-{step_to_load:06d}*.pt"))
+            if len(matches) != 1:
+                raise ValueError(
+                    f"Couldn't uniquely resolve checkpoint for `{run_dir = }` at `{step_to_load = }`; found {len(matches)}"
+                )
+            checkpoint_pt = matches[0]
+        else:
+            matches = sorted(checkpoints_dir.glob("step-*.pt"))
+            if len(matches) == 0:
+                raise ValueError(f"Couldn't find any checkpoints in `{checkpoints_dir}`")
+            checkpoint_pt = matches[-1]
+
     # Otherwise =>> try looking for a match on `model_id_or_path` on the HF Hub (`VLA_HF_HUB_REPO`)
     else:
         # Search HF Hub Repo via fsspec API

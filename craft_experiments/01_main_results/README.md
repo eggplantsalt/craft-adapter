@@ -1,183 +1,99 @@
-# CRaFT Experiments - Table 1: Main Results
+# 01 Main Results（重构版）
 
-This directory contains automated scripts for running the main experiments (Table 1) of the CRaFT paper.
+本目录现在采用“轻量、参数化、可组合”的方式做主实验评估：
 
-## Overview
+- 一个脚本完成多 suite 评估
+- 可选自动 merge LoRA（用于你们训练产生的中间 checkpoint）
+- 不再把训练 + 评估 + 结果格式化强耦合在一条超长流水线里
 
-Table 1 evaluates CRaFT's performance on 4 LIBERO task suites:
-- `libero_spatial`: Spatial reasoning tasks
-- `libero_object`: Object manipulation tasks
-- `libero_goal`: Goal-conditioned tasks
-- `libero_10`: Long-horizon tasks (10 tasks)
+---
 
-## Prerequisites
+## 脚本
 
-1. **Environment Setup**: Ensure you have installed all dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+- `run_table1_experiments.sh`：主入口（评估用）
+  - 输入一个模型目录
+  - 通过 `SUITES` 选择一个或多个 LIBERO suites
+  - 通过 `AUTO_MERGE=True/False` 控制是否先 merge LoRA
 
-2. **Data Preparation**: Download LIBERO datasets to `datasets/rlds/`:
-   ```bash
-   # Follow VLA-Adapter's data preparation instructions
-   ```
+---
 
-3. **Pretrained Model**: Ensure you have access to the pretrained checkpoint:
-   - Default: `openvla/openvla-7b` (from HuggingFace Hub)
-   - Or specify a local path in the script
+## 什么时候需要 merge LoRA
 
-## Usage
+你们本地训练的 checkpoint（例如 `outputs/xxx--900_chkpt`）通常包含：
 
-### On Linux/Mac (Bash)
+- `lora_adapter/`
+- `action_head--xxx_checkpoint.pt`
+- `proprio_projector--xxx_checkpoint.pt`
+
+这类目录默认**不是完整 HF 权重目录**。若要直接用于 `run_libero_eval.py`，建议先 merge。  
+主脚本已支持自动 merge：
+
+- `AUTO_MERGE=True` 且目录中有 `lora_adapter/` 时，自动调用 `vla-scripts/merge_lora_weights_and_save.py`
+- merge 后会在同目录生成 `model.safetensors`（或等价完整权重）
+- 若设置 `MERGE_OUTPUT_DIR`，脚本会先复制到该目录再 merge，避免污染原始 `MODEL_DIR`
+
+---
+
+## 用法
+
+### 1) 评估官方完整模型（通常无需 merge）
 
 ```bash
-cd /path/to/VLA-Adapter
+MODEL_DIR=outputs/LIBERO-Spatial-Pro \
+SUITES=libero_spatial \
+AUTO_MERGE=False \
 bash craft_experiments/01_main_results/run_table1_experiments.sh
 ```
 
-### On Windows (PowerShell)
+### 2) 评估你们自己的 LoRA checkpoint（自动 merge）
 
-```powershell
-cd E:\VLA-Adapter
-powershell -ExecutionPolicy Bypass -File craft_experiments/01_main_results/run_table1_experiments.ps1
-```
-
-## What the Script Does
-
-For each task suite, the script:
-
-1. **Training Phase**:
-   - Trains a CRaFT model for 20,000 steps
-   - Uses batch size 8, learning rate 5e-4
-   - Enables CRaFT with ε=0.1, η_λ=0.01
-   - Saves checkpoints every 5,000 steps
-
-2. **Evaluation Phase**:
-   - Automatically finds the latest checkpoint
-   - Runs 50 evaluation trials per task
-   - Logs results to `eval_logs/`
-
-3. **Results Aggregation**:
-   - Extracts success rates from evaluation logs
-   - Saves results to `table1_results.log`
-   - Generates a formatted markdown table
-
-## Configuration
-
-You can modify the following parameters in the script:
-
-### Training Hyperparameters
 ```bash
-BATCH_SIZE=8
-LEARNING_RATE=5e-4
-MAX_STEPS=20000
-SAVE_FREQ=5000
+MODEL_DIR=/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--6000_chkpt \
+SUITES=libero_spatial \
+AUTO_MERGE=True \
+USE_MINIVLA=True \
+VLM_PATH=pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b \
+MERGE_OUTPUT_DIR=/opt/data/private/models \
+bash craft_experiments/01_main_results/run_table1_experiments.sh
 ```
 
-### CRaFT Hyperparameters
-```bash
-CRAFT_RETENTION_BUDGET=0.1    # ε: representation drift budget
-CRAFT_DUAL_LR=0.01            # η_λ: dual variable learning rate
-CRAFT_ENABLE_PROJECTION=True  # Enable gradient projection
+---
+
+## 关键参数
+
+- `MODEL_DIR`（必填）: 待评估模型目录
+- `SUITES`: 逗号分隔列表，默认 `libero_spatial`
+- `AUTO_MERGE`: `True/False`，默认 `False`
+- `MERGE_OUTPUT_DIR`: 可选。设置后 merge 在该目录进行，评估也使用该 merge 产物目录
+- `USE_MINIVLA`: merge 时是否走 minivla 路径，默认 `True`
+- `VLM_PATH`: `USE_MINIVLA=True` 时的基座路径
+- `BASE_CHECKPOINT`: `USE_MINIVLA=False` 时必须显式设置（默认不再给 `openvla/openvla-7b`）
+- `NUM_TRIALS_PER_TASK`: 每任务评估回合数，默认 `50`
+- `NUM_IMAGES_IN_INPUT`: 默认 `2`
+- `USE_PROPRIO`: 默认 `True`
+- `USE_PRO_VERSION`: 默认 `True`
+
+---
+
+## 输出
+
+- 汇总结果：`craft_experiments/01_main_results/table1_results.log`
+- 详细日志：`craft_experiments/01_main_results/eval_logs/`
+
+`table1_results.log` 示例：
+
+```text
+libero_spatial: 0.972
+libero_object: 0.918
+libero_goal: 0.884
+libero_10: 0.801
 ```
 
-### Evaluation Configuration
-```bash
-NUM_TRIALS_PER_TASK=50        # Number of rollouts per task
-NUM_IMAGES_IN_INPUT=2         # Use wrist camera (1=no wrist, 2=with wrist)
-```
+---
 
-## Output Files
+## `AUTO_MERGE=False` 的含义
 
-After running the script, you will find:
-
-```
-craft_experiments/01_main_results/
-├── table1_results.log          # Raw results (task_suite: success_rate)
-├── table1_formatted.md         # Formatted markdown table
-└── eval_logs/                  # Detailed evaluation logs
-    ├── eval_libero_spatial_*.txt
-    ├── eval_libero_object_*.txt
-    ├── eval_libero_goal_*.txt
-    └── eval_libero_10_*.txt
-```
-
-### Example Output
-
-**table1_results.log**:
-```
-Starting experiments at 2026-02-27 10:00:00
-
-libero_spatial: 0.8500
-
-libero_object: 0.9200
-
-libero_goal: 0.8800
-
-libero_10: 0.7600
-```
-
-**table1_formatted.md**:
-```markdown
-| Task Suite | Success Rate |
-|------------|-------------|
-| libero_10 | 0.7600 (76.0%) |
-| libero_goal | 0.8800 (88.0%) |
-| libero_object | 0.9200 (92.0%) |
-| libero_spatial | 0.8500 (85.0%) |
-|------------|-------------|
-| **Average** | **0.8525 (85.2%)** |
-```
-
-## Troubleshooting
-
-### Training Fails
-- Check GPU memory (requires ~19GB for CRaFT)
-- Reduce `BATCH_SIZE` if OOM occurs
-- Check data paths are correct
-
-### Evaluation Fails
-- Ensure LIBERO environment is properly installed
-- Check checkpoint path exists
-- Verify `num_images_in_input` matches training configuration
-
-### Success Rate Not Extracted
-- Check evaluation log file exists
-- Verify log format matches expected pattern
-- Run log parser manually: `python common_utils/log_parser.py <log_file>`
-
-## Estimated Runtime
-
-On a single RTX 4090 (24GB):
-- Training: ~4-6 hours per task suite (20k steps)
-- Evaluation: ~2-3 hours per task suite (50 trials × 10 tasks)
-- **Total for all 4 suites: ~24-36 hours**
-
-## Notes
-
-- The script runs experiments **sequentially** (one task suite at a time)
-- Training checkpoints are saved to `runs/craft-{task_suite}-table1/`
-- Evaluation videos are saved to `experiments/logs/rollout_videos/`
-- WandB logging is enabled by default (configure `wandb_entity` in script)
-
-## Next Steps
-
-After completing Table 1 experiments:
-1. Review results in `table1_formatted.md`
-2. Compare with baseline results (without CRaFT)
-3. Proceed to Table 2 (multi-task) and Table 3 (few-shot) experiments
-4. Run ablation studies (Table 4)
-
-## Citation
-
-If you use these scripts, please cite:
-
-```bibtex
-@article{craft2024,
-  title={CRaFT: Constrained Representation and Fine-Tuning for Vision-Language-Action Models},
-  author={Your Name},
-  journal={arXiv preprint},
-  year={2024}
-}
-```
-
+- `AUTO_MERGE=False` **不是**“自动按 LoRA 方式评估”
+- 它表示脚本不执行 merge，直接把 `MODEL_DIR` 传给评估脚本
+- 如果 `MODEL_DIR` 已是完整模型目录（如含 `model.safetensors`），可直接评估
+- 如果 `MODEL_DIR` 只有 `lora_adapter/` 等中间产物，通常需要先 merge 再评估

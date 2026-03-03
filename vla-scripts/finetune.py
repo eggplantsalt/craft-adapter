@@ -1135,6 +1135,10 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Record original learning rate
     original_lr = optimizer.param_groups[0]["lr"]
 
+    # Warmup steps: only enable when user provides integer-like steps >= 1
+    # (default 0.1 from legacy config is treated as disabled to avoid overriding scheduler every iteration)
+    warmup_steps = int(cfg.lr_warmup_steps) if cfg.lr_warmup_steps >= 1 else 0
+
     # Create learning rate scheduler
     # 1. MultiStepLR
     scheduler = MultiStepLR(
@@ -1441,24 +1445,27 @@ def finetune(cfg: FinetuneConfig) -> None:
                         "VLA Train/Learning Rate": metrics.get('learning_rate', optimizer.param_groups[0]['lr']),
                     }, step=log_step)
 
-            # [If applicable] Linearly warm up learning rate from 10% to 100% of original
-            if cfg.lr_warmup_steps > 0:
-                lr_progress = min((gradient_step_idx + 1) / cfg.lr_warmup_steps, 1.0)  # Cap at 1.0
-                current_lr = original_lr * (0.1 + 0.9 * lr_progress)
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = current_lr
-
             if distributed_state.is_main_process and gradient_step_idx % cfg.wandb_log_freq == 0:
                 # 已经在上面的日志块中记录了学习率，这里移除重复
                 pass
 
             # Optimizer and LR scheduler step
             if (batch_idx + 1) % cfg.grad_accumulation_steps == 0:
+                completed_step = (batch_idx + 1) // cfg.grad_accumulation_steps
+
+                # Optional linear warmup on optimizer-step boundaries
+                if warmup_steps > 0 and completed_step <= warmup_steps:
+                    lr_progress = min(completed_step / warmup_steps, 1.0)
+                    warmup_lr = original_lr * (0.1 + 0.9 * lr_progress)
+                    for param_group in optimizer.param_groups:
+                        param_group["lr"] = warmup_lr
+
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
-                completed_step = (batch_idx + 1) // cfg.grad_accumulation_steps
+                # Log/display the latest lr after scheduler update
+                metrics['learning_rate'] = optimizer.param_groups[0]['lr']
                 display_step = completed_step if not cfg.resume else cfg.resume_step + completed_step
                 
                 # 更新 tqdm 进度条，显示关键指标

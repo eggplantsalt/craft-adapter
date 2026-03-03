@@ -50,12 +50,29 @@ def main(cfg: ConvertConfig) -> None:
 
     if cfg.use_minivla:
         hf_token = ''
-        vlm = load_vla(
-            cfg.vlm_path,
-            hf_token=hf_token,
-            load_for_training=True,
+        project_root = Path(__file__).resolve().parents[1]
+        local_vlm_path = Path(cfg.vlm_path)
+        if not local_vlm_path.is_absolute():
+            local_vlm_path = (project_root / local_vlm_path).resolve()
+        resolved_vlm_path = str(local_vlm_path) if local_vlm_path.exists() else str(cfg.vlm_path)
+
+        # Keep loading behavior consistent with finetune.py:
+        # - base MiniVLM directory (e.g. prism-qwen...): use `load()`
+        # - VLA-style checkpoints: use `load_vla()`
+        if "prism-qwen25-extra-dinosiglip-224px-0_5b" in resolved_vlm_path:
+            vlm = load(
+                resolved_vlm_path,
+                hf_token=hf_token,
+                load_for_training=True,
             )
-        config = AutoConfig.from_pretrained("../pretrained_models/configs/config.json")
+        else:
+            vlm = load_vla(
+                resolved_vlm_path,
+                hf_token=hf_token,
+                load_for_training=True,
+            )
+
+        config = AutoConfig.from_pretrained(str(project_root / "pretrained_models" / "configs" / "config.json"))
         vla = AutoModelForVision2Seq.from_config(config, torch_dtype=torch.bfloat16)
         # for name, param in model.named_parameters():
         #     print(f"{name}: {param.shape}")
