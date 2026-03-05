@@ -124,6 +124,7 @@ class GenerateConfig:
     wandb_project: str = "your-wandb-project"        # Name of WandB project
 
     seed: int = 7                                    # Random Seed (for reproducibility)
+    save_rollout_video: bool = False                 # Whether to save rollout MP4 for every episode
 
     # fmt: on
     save_version: str = "vla-adapter"                # version of 
@@ -444,10 +445,16 @@ def run_task(
             task_successes += 1
             total_successes += 1
 
-        # Save replay video
-        save_rollout_video(
-            replay_images, total_episodes, success=success, task_description=task_description, log_file=log_file, save_version=save_version
-        )
+        # Save replay video only when explicitly enabled (disabled by default for faster eval)
+        if cfg.save_rollout_video:
+            save_rollout_video(
+                replay_images,
+                total_episodes,
+                success=success,
+                task_description=task_description,
+                log_file=log_file,
+                save_version=save_version,
+            )
 
         # Log results
         log_message(f"Success: {success}", log_file)

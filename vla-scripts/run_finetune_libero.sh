@@ -20,18 +20,18 @@ RUN_ROOT_DIR=${RUN_ROOT_DIR:-outputs}
 
 # Resume / checkpoint
 RESUME=${RESUME:-True}                          # True | False
-RESUME_STEP=${RESUME_STEP:-900}                   # e.g. 2500
-RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--900_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
+RESUME_STEP=${RESUME_STEP:-6000}                   # e.g. 2500
+RESUME_VLA_PATH=${RESUME_VLA_PATH:-/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--6000_chkpt}            # e.g. outputs/<run_id>--2500_chkpt
 
 # Training hyperparameters
 BATCH_SIZE=${BATCH_SIZE:-4}
-GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-8}
+GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-16}
 LEARNING_RATE=${LEARNING_RATE:-5e-5}
 LR_WARMUP_STEPS=${LR_WARMUP_STEPS:-0}
 LORA_RANK=${LORA_RANK:-64}
-MAX_STEPS=${MAX_STEPS:-10001}
-NUM_STEPS_BEFORE_DECAY=${NUM_STEPS_BEFORE_DECAY:-10000}
-SAVE_FREQ=${SAVE_FREQ:-2000}
+MAX_STEPS=${MAX_STEPS:-15001}
+NUM_STEPS_BEFORE_DECAY=${NUM_STEPS_BEFORE_DECAY:-8000}
+SAVE_FREQ=${SAVE_FREQ:-200}
 SHUFFLE_BUFFER_SIZE=${SHUFFLE_BUFFER_SIZE:-2000}
 
 # Logging

@@ -32,6 +32,7 @@ NUM_IMAGES_IN_INPUT=${NUM_IMAGES_IN_INPUT:-2}
 USE_PROPRIO=${USE_PROPRIO:-True}
 USE_FILM=${USE_FILM:-False}
 USE_PRO_VERSION=${USE_PRO_VERSION:-True}
+SAVE_ROLLOUT_VIDEO=${SAVE_ROLLOUT_VIDEO:-False}
 CENTER_CROP=${CENTER_CROP:-True}
 SEED=${SEED:-7}
 
@@ -83,6 +84,7 @@ echo "[INFO] PROJECT_ROOT   : ${PROJECT_ROOT}"
 echo "[INFO] MODEL_DIR      : ${MODEL_DIR}"
 echo "[INFO] SUITES         : ${SUITES}"
 echo "[INFO] AUTO_MERGE     : ${AUTO_MERGE}"
+echo "[INFO] SAVE_ROLLOUT_VIDEO: ${SAVE_ROLLOUT_VIDEO}"
 echo "[INFO] MERGE_OUTPUT_DIR: ${MERGE_OUTPUT_DIR:-<same-as-model-dir>}"
 echo "[INFO] RESULTS_LOG    : ${RESULTS_LOG}"
 echo "[INFO] LOCAL_LOG_DIR  : ${LOCAL_LOG_DIR}"
@@ -170,6 +172,7 @@ for suite in "${SUITE_ARRAY[@]}"; do
     --num_images_in_input "${NUM_IMAGES_IN_INPUT}" \
     --use_film "${USE_FILM}" \
     --use_pro_version "${USE_PRO_VERSION}" \
+    --save_rollout_video "${SAVE_ROLLOUT_VIDEO}" \
     --center_crop "${CENTER_CROP}" \
     --run_id_note "${RUN_ID_NOTE}" \
     --local_log_dir "${LOCAL_LOG_DIR}" \

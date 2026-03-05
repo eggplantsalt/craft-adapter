@@ -48,7 +48,7 @@ bash craft_experiments/01_main_results/run_table1_experiments.sh
 ### 2) 评估你们自己的 LoRA checkpoint（自动 merge）
 
 ```bash
-MODEL_DIR=/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--6000_chkpt \
+MODEL_DIR=/workspace/craft-adapter/outputs/configs+libero_spatial_no_noops+b32+lr-0.0002+lora-r64+dropout-0.0--image_aug--VLA-Adapter--craft--libero_spatial_no_noops--20260302_160719--6900_chkpt \
 SUITES=libero_spatial \
 AUTO_MERGE=True \
 USE_MINIVLA=True \
